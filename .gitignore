@@ -1,0 +1,31 @@
+# Python
+venv/
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+
+# Model files (too large for GitHub)
+data/models/*.pkl
+data/raw/*.csv
+data/processed/*.csv
+
+# Environment secrets
+.env
+*.env
+config/
+
+# n8n data
+n8n/data/
+
+# Database
+*.sql.bak
+
+# OS
+.DS_Store
+Thumbs.db
+
+# IDE
+.vscode/
+.idea/

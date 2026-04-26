@@ -1,0 +1,29 @@
+{
+  "version": "1.0.0",
+  "commodity": "Tomato",
+  "markets": [
+    "Kolar",
+    "Chikkaballapur"
+  ],
+  "horizon": "60 days",
+  "algorithm": "RandomForestRegressor",
+  "features": [
+    "month",
+    "month_sin",
+    "month_cos",
+    "season",
+    "quarter",
+    "modal_price",
+    "price_7d_avg",
+    "price_30d_avg",
+    "price_7d_ago",
+    "price_30d_ago",
+    "price_trend_7d",
+    "vs_seasonal",
+    "seasonal_avg",
+    "arrivals_tonnes",
+    "arrivals_7d_avg"
+  ],
+  "test_mape": 11.98,
+  "test_r2": 0.528
+}
