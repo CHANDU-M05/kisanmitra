@@ -312,3 +312,30 @@ def clean_data():
             }
     except Exception as e:
         return {"status": "error", "message": str(e)}
+
+@app.post("/satellite/verify")
+def satellite_verify(
+    lat: float,
+    lon: float,
+    crop: str = "Tomato",
+    farmer_name: str = "Farmer"
+):
+    """
+    Verify a farmer's crop declaration using real Sentinel-2 NDVI.
+    """
+    import subprocess, json
+    try:
+        result = subprocess.run(
+            ["python", "scripts/04_satellite_verify.py",
+             str(lat), str(lon), crop, farmer_name],
+            cwd=BASE_DIR,
+            capture_output=True, text=True, timeout=120
+        )
+        lines = result.stdout.strip().split("\n")
+        for i, line in enumerate(lines):
+            if "Full result JSON:" in line:
+                json_str = "\n".join(lines[i+1:])
+                return json.loads(json_str)
+        return {"status": "error", "message": result.stderr[-300:]}
+    except Exception as e:
+        return {"status": "error", "message": str(e)}
