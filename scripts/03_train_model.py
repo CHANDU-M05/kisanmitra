@@ -2,12 +2,15 @@ import pandas as pd
 import numpy as np
 import joblib
 import json
+import os
 import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 from pathlib import Path
 from sklearn.ensemble import RandomForestRegressor
 from sklearn.metrics import mean_absolute_percentage_error, r2_score, mean_absolute_error
+from sqlalchemy import create_engine, Column, Integer, String, Float, Date
+from sqlalchemy.orm import declarative_base, sessionmaker
 
 BASE_DIR      = Path(__file__).parent.parent
 PROCESSED_DIR = BASE_DIR / "data" / "processed"
@@ -154,6 +157,57 @@ def save_model(model, features, test_mape, test_r2):
     print(f"  Model saved: {model_path} ({size:.0f} KB)")
     print(f"  Metadata saved: {MODELS_DIR / 'model_metadata.json'}")
 
+def save_prices_to_db():
+    """Upsert cleaned tomato CSV data into the mandi_prices table."""
+    print("\nSaving prices to database...")
+    csv_path = PROCESSED_DIR / "tomato_model_data.csv"
+    df = pd.read_csv(csv_path)
+    df["arrival_date"] = pd.to_datetime(df["arrival_date"])
+
+    DATABASE_URL = os.getenv("DATABASE_URL", f"sqlite:///{BASE_DIR / 'kisanmitra.db'}")
+    engine = create_engine(DATABASE_URL,
+        connect_args={"check_same_thread": False} if "sqlite" in DATABASE_URL else {})
+
+    # Define the same model for table creation
+    DBBase = declarative_base()
+
+    class MandiPrice(DBBase):
+        __tablename__ = "mandi_prices"
+        id              = Column(Integer, primary_key=True, index=True)
+        state           = Column(String)
+        district        = Column(String)
+        market          = Column(String, index=True)
+        commodity       = Column(String, index=True)
+        arrival_date    = Column(Date, index=True)
+        min_price       = Column(Float)
+        max_price       = Column(Float)
+        modal_price     = Column(Float)
+        arrivals_tonnes = Column(Float)
+
+    DBBase.metadata.create_all(bind=engine)
+    Session = sessionmaker(bind=engine)
+    session = Session()
+
+    count = 0
+    for _, row in df.iterrows():
+        price = MandiPrice(
+            state="Karnataka",
+            district=row.get("district", row.get("market", "")),
+            market=row.get("market", ""),
+            commodity=row.get("commodity", "Tomato"),
+            arrival_date=row["arrival_date"].date() if hasattr(row["arrival_date"], "date") else row["arrival_date"],
+            min_price=row.get("min_price"),
+            max_price=row.get("max_price"),
+            modal_price=row.get("modal_price"),
+            arrivals_tonnes=row.get("arrivals_tonnes"),
+        )
+        session.add(price)
+        count += 1
+
+    session.commit()
+    session.close()
+    print(f"  Inserted {count:,} records into mandi_prices table")
+
 def main():
     print("="*50)
     print("KisanMitra - Model Training")
@@ -165,16 +219,13 @@ def main():
     test_mape, test_r2, y_pred_test = evaluate(model, X_train, X_test, y_train, y_test)
     plot_results(y_test, y_pred_test, dates_test, model, features)
     save_model(model, features, test_mape, test_r2)
+    save_prices_to_db()
     print("\n" + "="*50)
     print("TRAINING COMPLETE")
     print("="*50)
     print(f"\nTest MAPE: {test_mape:.2f}%")
     print(f"Test R²:   {test_r2:.4f}")
-    print("\nWhat to tell your guide:")
-    print(f"'Our Random Forest model achieves {test_mape:.1f}% MAPE")
-    print(f" on held-out test data, trained on {len(X_train):,}")
-    print(f" historical price records from AGMARKNET.'")
-    print("\nNext step: Phase 7 - FastAPI backend")
 
 if __name__ == "__main__":
     main()
+

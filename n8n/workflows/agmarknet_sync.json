@@ -1,0 +1,55 @@
+{
+  "name": "AGMARKNET Daily Sync",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "cronExpression",
+              "expression": "0 6 * * *"
+            }
+          ]
+        }
+      },
+      "name": "Cron (6 AM)",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1,
+      "position": [ 240, 300 ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "http://host.docker.internal:8000/internal/sync",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "name": "Trigger FastAPI Sync",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 3,
+      "position": [ 460, 300 ]
+    }
+  ],
+  "connections": {
+    "Cron (6 AM)": {
+      "main": [
+        [
+          {
+            "node": "Trigger FastAPI Sync",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": true
+}

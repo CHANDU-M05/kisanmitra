@@ -1,0 +1,53 @@
+{
+  "name": "Google Form to KisanMitra",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "google-form-webhook",
+        "options": {}
+      },
+      "name": "Google Form Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 1,
+      "position": [ 240, 300 ],
+      "webhookId": "kisanmitra-google-form-listener"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "http://host.docker.internal:8000/farmer/declare",
+        "sendBody": true,
+        "bodyParameters": {
+          "parameters": [
+            { "name": "farmer_name", "value": "={{$json.body.farmer_name}}" },
+            { "name": "phone", "value": "={{$json.body.phone}}" },
+            { "name": "village", "value": "={{$json.body.village}}" },
+            { "name": "district", "value": "={{$json.body.district}}" },
+            { "name": "crop", "value": "={{$json.body.crop}}" },
+            { "name": "area_acres", "value": "={{$json.body.area_acres}}" }
+          ]
+        },
+        "options": {}
+      },
+      "name": "Declare in KisanMitra",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 3,
+      "position": [ 460, 300 ]
+    }
+  ],
+  "connections": {
+    "Google Form Webhook": {
+      "main": [
+        [
+          {
+            "node": "Declare in KisanMitra",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": true
+}

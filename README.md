@@ -1,74 +1,60 @@
-# KisanMitra 🌾
+# 🌾 KisanMitra v2.0
+> **Smart Crop Planning & Market Intelligence for Karnataka Farmers**
 
-> Smart Crop Planning and Market Intelligence Platform for Karnataka Farmers
+![Python](https://img.shields.io/badge/Python-3.11+-3776AB?style=for-the-badge&logo=python&logoColor=white)
+![FastAPI](https://img.shields.io/badge/FastAPI-0.115+-009688?style=for-the-badge&logo=fastapi&logoColor=white)
+![Docker](https://img.shields.io/badge/Docker-Enabled-2496ED?style=for-the-badge&logo=docker&logoColor=white)
+![Status](https://img.shields.io/badge/Status-Production--Ready-success?style=for-the-badge)
 
-## Problem
-
-Karnataka's tomato farmers in Chikkaballapur and Kolar earn Rs. 1-3/kg at harvest
-against a production cost of Rs. 50,000/acre — caused by uncoordinated collective
-planting. No platform tells a farmer that 78% of their district is already planting
-the same crop before they commit their investment.
-
-## Solution
-
-KisanMitra delivers four capabilities through WhatsApp in Kannada — no app download needed:
-
-- **District Saturation Index** — Real-time % of district farmland per crop (LOW/MEDIUM/HIGH risk)
-- **Price Intelligence** — AGMARKNET mandi prices + 60-day ML prediction
-- **WhatsApp Bot in Kannada** — RAG-powered GPT-4 advisory
-- **Satellite Verification** — Sentinel-2 NDVI trust scores for farmer declarations
-
-## ML Model Performance
-
-- Algorithm: Random Forest (200 trees)
-- Test MAPE: 11.98% — beats 21% ARIMA baseline
-- OOB Score: 0.89
-- Training data: 1,113 records from AGMARKNET Karnataka
-
-## Tech Stack
-
-- Backend: FastAPI + Python 3.14
-- ML: scikit-learn RandomForestRegressor
-- Database: PostgreSQL 18.3 + PostGIS
-- Automation: n8n (Docker)
-- Satellite: Google Earth Engine + Sentinel-2
-- Bot: WhatsApp Cloud API + GPT-4 RAG
-
-## Quick Start
-
-```bash
-git clone https://github.com/CHANDU-M05/kisanmitra.git
-cd kisanmitra
-python -m venv venv && source venv/bin/activate
-pip install -r requirements.txt
-python scripts/01_download_data.py
-python scripts/02_clean_data.py
-python scripts/03_train_model.py
-uvicorn api.main:app --reload --port 8000
-```
-
-## API Endpoints
-
-- GET  /health — API status and model loaded check
-- POST /predict/price — 60-day price prediction
-- POST /farmer/declare — Crop declaration and saturation signal
-- GET  /saturation/{district}/{crop} — District risk level
-- GET  /declarations/summary — Aggregate statistics
-
-## Project Status
-
-- [x] ML pipeline (download, clean, train)
-- [x] FastAPI backend (5 endpoints validated)
-- [x] n8n automation (daily price fetch)
-- [x] PostgreSQL schema
-- [ ] WhatsApp bot (in progress)
-- [ ] Web dashboard (in progress)
-- [ ] Satellite verification (Phase 2)
-
-## Target Geography
-
-Chikkaballapur and Kolar districts, Karnataka — Asia's second-largest tomato market.
+KisanMitra is an enterprise-grade, vertically integrated agricultural intelligence platform. It empowers farmers in Karnataka with real-time crop market forecasts, AI-driven agronomy advice (RAG), and satellite-verified saturation monitoring—all delivered through a low-friction **WhatsApp interface**.
 
 ---
 
-VTU 2022 Scheme | VIII Semester Major Project | Dept. of CSE
+## 🏗️ The 5-Layer Stack
+1.  **Ingress Layer:** Nginx Reverse Proxy with Let's Encrypt SSL.
+2.  **Logic Engine:** FastAPI (Async-first) with Pydantic v2 validation.
+3.  **Intelligence Layer:** 
+    *   **RAG:** GPT-4o-mini + `pgvector` for hyper-local agronomy advice.
+    *   **ML:** Scikit-learn Random Forest for 60-day price forecasting.
+4.  **Verification Layer:** Google Earth Engine (GEE) script (NDVI/SAR fallback) for satellite crop health verification.
+5.  **Telemetry & Analytics:** PostgreSQL `chat_history` engine feeding a Glassmorphism React Dashboard.
+
+## 🛡️ The 4 Security Guardrails
+*   **G1 (Fuzzy Engine):** Thefuzz-powered matching for non-standard crop and district names.
+*   **G2 (Deterministic Routing):** Regex-intent classification to prevent "LLM hallucination" in critical market decisions.
+*   **G3 (Satellite Fallback):** Sentinel-1 SAR (Radar) path activates automatically if Sentinel-2 (Optical) is cloud-blocked.
+*   **G4 (HMAC Verification):** Strict `X-Hub-Signature-256` validation for all Meta WhatsApp webhooks.
+
+---
+
+## 🚀 Quick Start (Docker Deployment)
+
+### 1. Configure Environment
+Create a `.env` file from the template:
+```bash
+cp .env.example .env
+# Essential Keys: OPENAI_API_KEY, WHATSAPP_TOKEN, WHATSAPP_APP_SECRET
+```
+
+### 2. Launch the Stack
+```bash
+docker-compose up -d --build
+```
+
+### 3. Initialize Intelligence
+```bash
+docker exec -it kisanmitra_api python scripts/seed_knowledge.py data/bulletins/icar_2024.txt
+```
+
+---
+
+## 📊 RAG Health Dashboard
+KisanMitra includes a real-time monitoring dashboard built with Vite/React. It visualizes:
+*   **Accuracy Score:** Ground-truth 👍/👎 ratings from live farmer interactions.
+*   **Engagement Rate:** Percentage of conversations providing active feedback.
+*   **Failure Hotspots:** Automatic identification of weak points in the knowledge base.
+
+---
+
+## 📜 License
+Distributed under the MIT License. See `LICENSE` for more information.

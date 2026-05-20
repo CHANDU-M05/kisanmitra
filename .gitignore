@@ -15,6 +15,7 @@ data/processed/*.csv
 .env
 *.env
 config/
+credentials/
 
 # n8n data
 n8n/data/
@@ -29,3 +30,9 @@ Thumbs.db
 # IDE
 .vscode/
 .idea/
+
+# Application logs
+logs/
+
+# SSL Certificates
+certbot/

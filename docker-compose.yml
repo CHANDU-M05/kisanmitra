@@ -1,0 +1,75 @@
+version: '3.8'
+
+services:
+  db:
+    image: ankane/pgvector:latest
+    container_name: kisanmitra_db
+    environment:
+      POSTGRES_USER: kisanmitra_user
+      POSTGRES_PASSWORD: kisan2025secure
+      POSTGRES_DB: kisanmitra
+    ports:
+      - "5433:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U kisanmitra_user -d kisanmitra"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  api:
+    build: .
+    container_name: kisanmitra_api
+    depends_on:
+      db:
+        condition: service_healthy
+    ports:
+      - "8000:8000"
+    environment:
+      - DB_HOST=db
+      - DB_PORT=5432
+      - DB_USER=kisanmitra_user
+      - DB_PASSWORD=kisan2025secure
+      - DB_NAME=kisanmitra
+      - APP_ENV=development
+      - EE_CREDENTIALS_PATH=/app/credentials/gee-sa.json
+    volumes:
+      - ./data:/app/data
+      - ./credentials:/app/credentials:ro
+
+  dashboard:
+    image: node:20-alpine
+    container_name: kisanmitra_dashboard
+    working_dir: /app
+    volumes:
+      - ./dashboard:/app
+    ports:
+      - "5173:5173"
+    command: >
+      sh -c "npm install && npm run dev -- --host 0.0.0.0"
+
+  nginx:
+    image: nginx:latest
+    container_name: kisanmitra_proxy
+    restart: always
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./nginx/nginx.conf:/etc/nginx/conf.d/default.conf:ro
+      - ./certbot/conf:/etc/letsencrypt
+      - ./certbot/www:/var/www/certbot
+    depends_on:
+      - api
+
+  certbot:
+    image: certbot/certbot
+    container_name: kisanmitra_certbot
+    volumes:
+      - ./certbot/conf:/etc/letsencrypt
+      - ./certbot/www:/var/www/certbot
+    entrypoint: "/bin/sh -c 'trap exit TERM; while :; do certbot renew; sleep 12h & wait $${!}; done;'"
+
+volumes:
+  pgdata:

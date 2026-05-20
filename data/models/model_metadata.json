@@ -24,6 +24,6 @@
     "arrivals_tonnes",
     "arrivals_7d_avg"
   ],
-  "test_mape": 11.98,
-  "test_r2": 0.528
+  "test_mape": 17.5,
+  "test_r2": 0.443
 }

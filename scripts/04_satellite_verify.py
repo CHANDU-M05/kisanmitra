@@ -1,215 +1,340 @@
-import ee
+"""
+scripts/04_satellite_verify.py — GUARDRAIL 3
+
+NDVI verification pipeline with cloud-cover fallback:
+  Primary:  Sentinel-2 SR (optical, 10m) — blocked during monsoon
+  Fallback: Sentinel-1 GRD (SAR, 10m)   — penetrates clouds
+
+Flow:
+  1. Attempt Sentinel-2 NDVI for the 60-day window.
+  2. If <3 cloud-free observations → activate Sentinel-1 SAR path.
+  3. Compute trust score from whichever source succeeded.
+  4. Return structured JSON consumed by /satellite/verify endpoint.
+"""
+from __future__ import annotations
+
 import json
-import math
+import sys
 from datetime import datetime, timedelta
+from pathlib import Path
+from typing import Optional
+
+import ee
 
 # ── Initialize GEE ────────────────────────────────────────
-ee.Initialize(project='kisanmitra-494516')
+ee.Initialize(project="kisanmitra-494516")
 
 # ── Karnataka crop NDVI profiles ─────────────────────────
-# Format: [min_ndvi, max_ndvi, peak_month_start, peak_month_end]
-CROP_PROFILES = {
-    "Tomato":   {"ndvi_min": 0.35, "ndvi_max": 0.75, "months": [6, 7, 8, 9, 10, 11]},
-    "Potato":   {"ndvi_min": 0.30, "ndvi_max": 0.70, "months": [10, 11, 12, 1, 2]},
-    "Onion":    {"ndvi_min": 0.25, "ndvi_max": 0.60, "months": [10, 11, 12, 1]},
-    "Marigold": {"ndvi_min": 0.30, "ndvi_max": 0.65, "months": [8, 9, 10, 11]},
-    "Capsicum": {"ndvi_min": 0.35, "ndvi_max": 0.70, "months": [7, 8, 9, 10]},
+CROP_PROFILES: dict[str, dict] = {
+    "Tomato":   {"ndvi_min": 0.35, "ndvi_max": 0.75, "months": [6,7,8,9,10,11]},
+    "Potato":   {"ndvi_min": 0.30, "ndvi_max": 0.70, "months": [10,11,12,1,2]},
+    "Onion":    {"ndvi_min": 0.25, "ndvi_max": 0.60, "months": [10,11,12,1]},
+    "Marigold": {"ndvi_min": 0.30, "ndvi_max": 0.65, "months": [8,9,10,11]},
+    "Capsicum": {"ndvi_min": 0.35, "ndvi_max": 0.70, "months": [7,8,9,10]},
 }
 
-def get_sentinel2_ndvi(lat, lon, days_back=60):
-    """
-    Fetch Sentinel-2 NDVI for a 200m radius around GPS point.
-    Returns list of (date, ndvi) tuples.
-    """
-    point = ee.Geometry.Point([lon, lat])
-    buffer = point.buffer(200)  # 200m radius
+# GUARDRAIL 3: minimum usable Sentinel-2 observations before SAR fallback
+_MIN_OPTICAL_OBS = 3
 
-    end_date   = datetime.now()
-    start_date = end_date - timedelta(days=days_back)
+
+# ══════════════════════════════════════════════════════════
+# Sentinel-2 (optical) — primary path
+# ══════════════════════════════════════════════════════════
+
+def get_sentinel2_ndvi(
+    lat: float,
+    lon: float,
+    days_back: int = 60,
+) -> list[dict]:
+    """
+    Fetch cloud-filtered Sentinel-2 NDVI for a 200m buffer.
+    Returns list of {date, ndvi} sorted ascending.
+    """
+    point  = ee.Geometry.Point([lon, lat])
+    buffer = point.buffer(200)
+    end    = datetime.now()
+    start  = end - timedelta(days=days_back)
 
     collection = (
         ee.ImageCollection("COPERNICUS/S2_SR_HARMONIZED")
         .filterBounds(buffer)
-        .filterDate(start_date.strftime("%Y-%m-%d"), end_date.strftime("%Y-%m-%d"))
+        .filterDate(start.strftime("%Y-%m-%d"), end.strftime("%Y-%m-%d"))
         .filter(ee.Filter.lt("CLOUDY_PIXEL_PERCENTAGE", 20))
-        .map(lambda img: img.normalizedDifference(["B8", "B4"])
-                           .rename("NDVI")
-                           .set("system:time_start", img.get("system:time_start")))
+        .map(
+            lambda img: img
+            .normalizedDifference(["B8", "B4"])
+            .rename("NDVI")
+            .set("system:time_start", img.get("system:time_start"))
+        )
     )
 
-    # Get NDVI values
-    def extract_ndvi(img):
-        ndvi_val = img.reduceRegion(
+    def extract(img: ee.Image) -> ee.Feature:
+        val = img.reduceRegion(
             reducer=ee.Reducer.mean(),
             geometry=buffer,
             scale=10,
-            maxPixels=1e9
+            maxPixels=1e9,
         ).get("NDVI")
-        return ee.Feature(None, {
-            "ndvi": ndvi_val,
-            "date": img.date().format("YYYY-MM-dd")
-        })
+        return ee.Feature(None, {"ndvi": val, "date": img.date().format("YYYY-MM-dd")})
 
-    features = collection.map(extract_ndvi).getInfo()
-    results  = []
-
-    for f in features.get("features", []):
-        props = f.get("properties", {})
-        if props.get("ndvi") is not None:
-            results.append({
-                "date": props["date"],
-                "ndvi": round(props["ndvi"], 4)
-            })
-
+    features = collection.map(extract).getInfo()
+    results  = [
+        {"date": f["properties"]["date"], "ndvi": round(f["properties"]["ndvi"], 4)}
+        for f in features.get("features", [])
+        if f["properties"].get("ndvi") is not None
+    ]
     results.sort(key=lambda x: x["date"])
     return results
 
-def smooth_ndvi(ndvi_series, window=20):
-    """Apply 20-day moving average to NDVI time series."""
-    if len(ndvi_series) < 3:
-        return ndvi_series
+
+# ══════════════════════════════════════════════════════════
+# Sentinel-1 SAR — GUARDRAIL 3 fallback
+# ══════════════════════════════════════════════════════════
+
+def get_sentinel1_sar_proxy(
+    lat: float,
+    lon: float,
+    days_back: int = 60,
+) -> list[dict]:
+    """
+    GUARDRAIL 3: SAR backscatter proxy when optical is cloud-blocked.
+
+    Sentinel-1 GRD VV/VH backscatter is NOT NDVI, but provides a
+    vegetation proxy that correlates with crop biomass density.
+
+    Band selection:
+      VV  — sensitive to soil moisture / surface roughness
+      VH  — sensitive to vegetation volume (preferred for crops)
+
+    The returned 'ndvi' key is labelled as a SAR proxy (−20 to 0 dB
+    rescaled to 0–1) so downstream trust-score logic remains unchanged.
+    Callers should check result['source'] == 'sentinel1_sar'.
+    """
+    point  = ee.Geometry.Point([lon, lat])
+    buffer = point.buffer(200)
+    end    = datetime.now()
+    start  = end - timedelta(days=days_back)
+
+    collection = (
+        ee.ImageCollection("COPERNICUS/S1_GRD")
+        .filterBounds(buffer)
+        .filterDate(start.strftime("%Y-%m-%d"), end.strftime("%Y-%m-%d"))
+        .filter(ee.Filter.eq("instrumentMode", "IW"))
+        .filter(ee.Filter.listContains("transmitterReceiverPolarisation", "VH"))
+        .select(["VH"])
+    )
+
+    def extract_sar(img: ee.Image) -> ee.Feature:
+        # VH backscatter in dB (typically −25 to −5 dB for vegetation)
+        # Rescale to [0, 1] via linear map: −25 dB → 0, −5 dB → 1
+        vh_db = img.reduceRegion(
+            reducer=ee.Reducer.mean(),
+            geometry=buffer,
+            scale=10,
+            maxPixels=1e9,
+        ).get("VH")
+        return ee.Feature(None, {
+            "vh_db": vh_db,
+            "date":  img.date().format("YYYY-MM-dd"),
+        })
+
+    features = collection.map(extract_sar).getInfo()
+    results  = []
+    for f in features.get("features", []):
+        props = f["properties"]
+        vh_db = props.get("vh_db")
+        if vh_db is None:
+            continue
+        # Linear rescale from dB range [−25, −5] → [0, 1]
+        proxy = max(0.0, min(1.0, (vh_db + 25) / 20))
+        results.append({
+            "date":   props["date"],
+            "ndvi":   round(proxy, 4),  # labelled 'ndvi' for schema compat
+            "source": "sentinel1_sar",
+        })
+    results.sort(key=lambda x: x["date"])
+    return results
+
+
+# ══════════════════════════════════════════════════════════
+# Shared processing
+# ══════════════════════════════════════════════════════════
+
+def smooth_ndvi(series: list[dict], window: int = 20) -> list[dict]:
+    """Apply a centred moving-average to reduce noise."""
+    if len(series) < 3:
+        return series
     smoothed = []
-    for i, item in enumerate(ndvi_series):
-        start = max(0, i - window // 2)
-        end   = min(len(ndvi_series), i + window // 2 + 1)
-        avg   = sum(x["ndvi"] for x in ndvi_series[start:end]) / (end - start)
-        smoothed.append({"date": item["date"], "ndvi": round(avg, 4)})
+    for i, item in enumerate(series):
+        lo  = max(0, i - window // 2)
+        hi  = min(len(series), i + window // 2 + 1)
+        avg = sum(x["ndvi"] for x in series[lo:hi]) / (hi - lo)
+        smoothed.append({**item, "ndvi": round(avg, 4)})
     return smoothed
 
-def compute_trust_score(ndvi_series, crop, lat):
+
+def compute_trust_score(
+    series: list[dict],
+    crop: str,
+    source: str = "sentinel2",
+) -> tuple[float, str]:
     """
-    Compare NDVI signature against crop profile.
-    Returns trust score 0.0 to 1.0.
+    Score 0.0–1.0 comparing the NDVI/SAR proxy against the crop profile.
+
+    SAR scores are penalised by 0.1 to reflect lower confidence vs optical.
     """
-    if not ndvi_series:
+    if not series:
         return 0.0, "No satellite data available for this location"
 
-    profile = CROP_PROFILES.get(crop, CROP_PROFILES["Tomato"])
+    profile      = CROP_PROFILES.get(crop, CROP_PROFILES["Tomato"])
     current_month = datetime.now().month
+    recent_vals  = [x["ndvi"] for x in series[-3:]]
+    avg_val      = sum(recent_vals) / len(recent_vals)
 
-    # Recent NDVI — last 3 observations
-    recent_ndvi = [x["ndvi"] for x in ndvi_series[-3:]]
-    avg_ndvi    = sum(recent_ndvi) / len(recent_ndvi)
-
-    # Score 1: NDVI range match (0 to 0.5)
-    ndvi_min = profile["ndvi_min"]
-    ndvi_max = profile["ndvi_max"]
-    if ndvi_min <= avg_ndvi <= ndvi_max:
+    # Component 1: value range match (0–0.5)
+    lo, hi = profile["ndvi_min"], profile["ndvi_max"]
+    if lo <= avg_val <= hi:
         range_score = 0.5
-    elif avg_ndvi < ndvi_min:
-        gap = ndvi_min - avg_ndvi
-        range_score = max(0, 0.5 - (gap * 2))
+    elif avg_val < lo:
+        range_score = max(0.0, 0.5 - (lo - avg_val) * 2)
     else:
-        gap = avg_ndvi - ndvi_max
-        range_score = max(0, 0.5 - (gap * 2))
+        range_score = max(0.0, 0.5 - (avg_val - hi) * 2)
 
-    # Score 2: Season match (0 to 0.3)
+    # Component 2: season match (0–0.3)
     season_score = 0.3 if current_month in profile["months"] else 0.1
 
-    # Score 3: NDVI trend — is it growing? (0 to 0.2)
-    if len(ndvi_series) >= 5:
-        early = sum(x["ndvi"] for x in ndvi_series[:3]) / 3
-        late  = sum(x["ndvi"] for x in ndvi_series[-3:]) / 3
+    # Component 3: upward trend (0–0.2)
+    if len(series) >= 5:
+        early = sum(x["ndvi"] for x in series[:3]) / 3
+        late  = sum(x["ndvi"] for x in series[-3:]) / 3
         trend_score = 0.2 if late > early else 0.1
     else:
         trend_score = 0.1
 
     total = round(range_score + season_score + trend_score, 2)
 
+    # GUARDRAIL 3: SAR proxy confidence penalty
+    if source == "sentinel1_sar":
+        total = max(0.0, total - 0.10)
+
+    total = min(total, 1.0)
+
     if total >= 0.7:
-        message = f"High confidence — NDVI {avg_ndvi:.2f} matches {crop} profile"
+        msg = f"High confidence — {'NDVI' if source == 'sentinel2' else 'SAR proxy'} {avg_val:.2f} matches {crop} profile"
     elif total >= 0.4:
-        message = f"Moderate confidence — NDVI {avg_ndvi:.2f} partially matches {crop} profile"
+        msg = f"Moderate confidence — {'NDVI' if source == 'sentinel2' else 'SAR proxy'} {avg_val:.2f} partially matches {crop} profile"
     else:
-        message = f"Low confidence — NDVI {avg_ndvi:.2f} does not match {crop} profile"
+        msg = f"Low confidence — {'NDVI' if source == 'sentinel2' else 'SAR proxy'} {avg_val:.2f} does not match {crop} profile"
 
-    return min(total, 1.0), message
+    return total, msg
 
-def verify_declaration(lat, lon, crop, farmer_name="Test Farmer"):
+
+# ══════════════════════════════════════════════════════════
+# Main pipeline
+# ══════════════════════════════════════════════════════════
+
+def verify_declaration(
+    lat: float,
+    lon: float,
+    crop: str,
+    farmer_name: str = "Farmer",
+) -> Optional[dict]:
     """
-    Full satellite verification pipeline for a farmer declaration.
+    Full satellite verification with GUARDRAIL 3 cloud-cover fallback.
+
+    Returns a structured dict consumed by the /satellite/verify endpoint.
     """
     print(f"\n{'='*55}")
-    print(f"KisanMitra — Satellite Verification")
+    print("KisanMitra — Satellite Verification")
     print(f"{'='*55}")
-    print(f"Farmer:     {farmer_name}")
-    print(f"Crop:       {crop}")
-    print(f"GPS:        {lat}, {lon}")
+    print(f"Farmer: {farmer_name}  |  Crop: {crop}  |  GPS: {lat}, {lon}")
     print(f"{'='*55}")
 
-    print("\nStep 1: Fetching Sentinel-2 imagery...")
+    # ── Step 1: Sentinel-2 (optical) ──────────────────────
+    print("\nStep 1: Fetching Sentinel-2 imagery (cloud-filter < 20%) ...")
     try:
-        ndvi_series = get_sentinel2_ndvi(lat, lon, days_back=60)
-        print(f"  Found {len(ndvi_series)} cloud-free observations")
-    except Exception as e:
-        print(f"  GEE Error: {e}")
-        return None
+        s2_series = get_sentinel2_ndvi(lat, lon, days_back=60)
+        print(f"  Found {len(s2_series)} cloud-free observations")
+    except Exception as exc:
+        print(f"  GEE Sentinel-2 error: {exc}")
+        s2_series = []
 
-    if not ndvi_series:
-        print("  No usable imagery found — flagging for manual review")
-        return {"trust_score": 0.0, "status": "NO_DATA", "message": "No satellite data"}
+    # ── Step 2: GUARDRAIL 3 — SAR fallback ────────────────
+    source = "sentinel2"
+    series = s2_series
 
-    print("\nStep 2: Applying 20-day NDVI smoothing...")
-    smoothed = smooth_ndvi(ndvi_series, window=20)
-    print(f"  Latest NDVI values:")
+    if len(s2_series) < _MIN_OPTICAL_OBS:
+        print(
+            f"\n  ⚠ Only {len(s2_series)} optical obs — below threshold ({_MIN_OPTICAL_OBS})."
+            f"\n  Activating GUARDRAIL 3: Sentinel-1 SAR fallback ..."
+        )
+        try:
+            sar_series = get_sentinel1_sar_proxy(lat, lon, days_back=60)
+            print(f"  SAR: found {len(sar_series)} observations")
+            if sar_series:
+                series = sar_series
+                source = "sentinel1_sar"
+            else:
+                print("  SAR also returned no data — flagging for manual review.")
+        except Exception as exc:
+            print(f"  SAR error: {exc}")
+
+    if not series:
+        return {
+            "trust_score": 0.0,
+            "status":      "NO_DATA",
+            "message":     "No usable satellite data (optical or SAR). Manual review required.",
+            "source":      "none",
+        }
+
+    # ── Step 3: Smooth + score ─────────────────────────────
+    print(f"\nStep 2: Smoothing ({source}) time series ...")
+    smoothed = smooth_ndvi(series, window=20)
     for obs in smoothed[-3:]:
-        print(f"    {obs['date']}: {obs['ndvi']}")
+        label = "NDVI" if source == "sentinel2" else "SAR proxy"
+        print(f"  {obs['date']}:  {label} = {obs['ndvi']}")
 
-    print("\nStep 3: Computing trust score...")
-    trust_score, message = compute_trust_score(smoothed, crop, lat)
+    print("\nStep 3: Computing trust score ...")
+    trust, message = compute_trust_score(smoothed, crop, source)
 
-    if trust_score >= 0.7:
-        status = "VERIFIED"
-        emoji  = "✓"
-    elif trust_score >= 0.4:
-        status = "PARTIAL"
-        emoji  = "~"
-    else:
-        status = "FLAGGED"
-        emoji  = "✗"
+    status = "VERIFIED" if trust >= 0.7 else ("PARTIAL" if trust >= 0.4 else "FLAGGED")
+    emoji  = {"VERIFIED": "✓", "PARTIAL": "~", "FLAGGED": "✗"}[status]
 
     result = {
         "farmer":      farmer_name,
         "crop":        crop,
         "lat":         lat,
         "lon":         lon,
-        "trust_score": trust_score,
+        "trust_score": trust,
         "status":      status,
         "message":     message,
-        "ndvi_obs":    len(ndvi_series),
+        "source":      source,           # sentinel2 | sentinel1_sar | none
+        "ndvi_obs":    len(series),
         "latest_ndvi": smoothed[-1]["ndvi"] if smoothed else None,
         "verified_at": datetime.now().isoformat(),
     }
 
     print(f"\n{'='*55}")
-    print(f"  {emoji} RESULT: {status}")
-    print(f"  Trust Score: {trust_score}")
+    print(f"  {emoji}  {status}  |  Score: {trust}  |  Source: {source}")
     print(f"  {message}")
-    print(f"{'='*55}")
-
+    print(f"{'='*55}\n")
     return result
 
-# ── Test with Chikkaballapur coordinates ─────────────────
-if __name__ == "__main__":
-    # Chikkaballapur tomato farm coordinates
-    result = verify_declaration(
-        lat=13.4355,
-        lon=77.7315,
-        crop="Tomato",
-        farmer_name="Raju (Test)"
-    )
-    if result:
-        print("\nFull result JSON:")
-        print(json.dumps(result, indent=2))
 
 # ── CLI entry point ───────────────────────────────────────
-import sys
-if len(sys.argv) == 5:
-    lat  = float(sys.argv[1])
-    lon  = float(sys.argv[2])
-    crop = sys.argv[3]
-    name = sys.argv[4]
-    result = verify_declaration(lat, lon, crop, name)
-    if result:
-        print("\nFull result JSON:")
-        print(json.dumps(result, indent=2))
+if __name__ == "__main__":
+    if len(sys.argv) == 5:
+        r = verify_declaration(
+            lat=float(sys.argv[1]),
+            lon=float(sys.argv[2]),
+            crop=sys.argv[3],
+            farmer_name=sys.argv[4],
+        )
+    else:
+        r = verify_declaration(
+            lat=13.4355, lon=77.7315,
+            crop="Tomato", farmer_name="Raju (Test)",
+        )
+    if r:
+        print("Full result JSON:")
+        print(json.dumps(r, indent=2))
