@@ -170,9 +170,15 @@ def resolve_district(text: str) -> Optional[str]:
 
 
 def extract_area(text: str) -> float:
-    """Extract the first numeric value from text (area in acres)."""
-    nums = re.findall(r"[\d.]+", text)
-    return float(nums[0]) if nums else 1.0
+    """Extract the first valid numeric value from text (area in acres)."""
+    nums = re.findall(r"\d+(?:\.\d+)?", text)
+    if nums:
+        try:
+            val = float(nums[0])
+            return val if val > 0 else 1.0
+        except ValueError:
+            return 1.0
+    return 1.0
 
 
 # ══════════════════════════════════════════════════════════
