@@ -1,46 +1,57 @@
 # 🌾 KisanMitra 
 > **Smart Crop Planning & Market Intelligence Platform for Karnataka Farmers**
 
-KisanMitra is a streamlined agricultural intelligence platform. It empowers farmers in Karnataka with real-time crop market forecasts and AI-driven agronomy advice via a simple **WhatsApp interface**, while giving administrators a powerful web dashboard to monitor district-level saturation and price trends.
-
-This repository has been deliberately simplified for maximum stability and developer accessibility. Complex containerization (Docker) and external orchestrators (n8n) have been permanently removed in favor of a standard, test-driven Python + React architecture.
+KisanMitra is an agricultural intelligence platform that empowers farmers in Karnataka with real-time crop market forecasts (60-day mandi price prediction) and AI-driven precision agronomy advice via a simple **Telegram Bot (`@KisanMitraAssistBot`)** & **WhatsApp interface**, while giving administrators a web dashboard to monitor district-level crop saturation and price anomalies.
 
 ---
 
-## ✨ Latest Updates (v2.0)
-The project has reached production readiness with the following features fully implemented:
-1. **Progressive Web App (PWA)**: The farmer-facing web dashboard is now fully installable on mobile devices (Android/iOS) with offline caching and manifest support.
-2. **i18n Localization**: Seamless Kannada/English toggling across all farmer workspaces using `react-i18next`.
-3. **JWT Authentication**: The Admin Dashboard is now fully secured with cryptographic JWT authentication, password hashing (`bcrypt`), and backend route protection.
+## ✨ Features & Architecture (v3.0)
+
+1. **CatBoost 60-Day Mandi Price Forecasting**: Multi-horizon price forecasts across all 31 Karnataka districts with anomaly classification (`CRASH` / `SPIKE`) and upper/lower bounds.
+2. **Deterministic Intent Guardrails (No LLM Hallucinations)**:
+   - Market Prices, Sowing Declarations, and District Saturation Risk queries **bypass the LLM completely** and query PostgreSQL directly.
+   - Only agronomy disease & pest queries reach the **pgvector + Gemini RAG pipeline**.
+3. **Interactive Sowing Confirmation Gate**: Mandatory two-stage declaration flow prevents accidental or fake database registrations.
+4. **31-District Canonical Resolution**: 100% normalization of all 31 Karnataka districts across legacy English spellings (`Shimoga`, `Belgaum`, `Gulbarga`), modern official spellings (`Shivamogga`, `Belagavi`), Kannada script locatives (`ಶಿವಮೊಗ್ಗದಲ್ಲಿ`), and Kanglish transliterations (`shimogalli`).
+5. **Telegram Bot Integration**: Built with `Aiogram 3`, featuring Redis FSM state persistence, inline keyboards, and automated crop menu registration.
+6. **Progressive Web App (PWA) & Admin Dashboard**: React 18 + Vite dashboard with dark mode, live telemetry, and real-time bot transcript streaming (`BotMonitorView.jsx`).
+7. **Empirical Benchmarks**: Verified via a 1,000-case procedural stress test and a 25-case live HTTP E2E transcript audit.
 
 ---
 
 ## 🏗️ Tech Stack
-- **Backend:** FastAPI (Python 3.11+) for high-performance async routing.
-- **Database:** PostgreSQL + `pgvector` for robust relational data and vector similarity search.
-- **Frontend (Admin Dashboard):** Rebuilt from scratch using **Vite + React 19** + Tailwind CSS.
-- **AI / ML Engine:** Scikit-learn (Random Forest Price Prediction) and Google Gemini (RAG for agronomy).
-- **Testing:** Comprehensive `pytest` suite guaranteeing intent routing stability.
+
+- **Backend:** FastAPI (Python 3.14) + SQLAlchemy + Pydantic v2
+- **Database:** PostgreSQL + `pgvector` (SQLite fallback supported)
+- **Machine Learning:** CatBoost (`price_model.pkl`) + Scikit-learn + LightGBM
+- **Bot Framework:** Aiogram 3 + Redis FSM
+- **Frontend:** Vite 8 + React 18 + TailwindCSS + Recharts + Lucide Icons
+- **Testing:** Pytest (43 core tests) + 1,000-Case Stress Harness + 25-Case Live HTTP E2E Suite
 
 ---
 
 ## 📂 Directory Structure
 
-A quick guide to finding your way around the highly-optimized codebase:
-
 ```text
 kisanmitra/
-├── backend/                    # 🧠 Core Backend Logic
+├── backend/                    # 🧠 Core Backend REST API
 │   ├── core/                   # DB connections, config, and SQLAlchemy ORM models
-│   ├── routers/                # API Endpoints (WhatsApp webhook, analytics, etc)
-│   ├── services/               # Business Logic (RAG, ML, message handling)
-│   └── main.py                 # FastAPI Application Entry Point
-├── frontend/                   # 📊 Rebuilt React Admin Dashboard (Vite)
-│   ├── src/pages/              # React Views (Terminal, Insights, Farmers, BotMonitor, Settings)
-│   └── src/components/         # Reusable UI components (Layout, etc.)
-├── data/                       # 📁 Local Storage for ML models and raw data drops
-├── scripts/                    # ⚙️ Utility scripts (DB init, ML pipeline, data cleaning)
-├── tests/                      # 🛡️ Pytest suite for core logic validation
+│   ├── routers/                # API Endpoints (conversation, price, farmers, analytics, audit)
+│   ├── services/               # Core Logic (message_handler, ml_service, rag, farmer_service)
+│   └── main.py                 # FastAPI Application Entrypoint
+├── telegram_bot/               # 🤖 Aiogram 3 Telegram Bot Application
+│   ├── handlers/               # Command & message routers (start, price, declare, advisory, mycrops)
+│   ├── middleware/             # Rate-limiting & request deduplication
+│   └── bot.py                  # Bot entrypoint & polling dispatcher
+├── frontend/                   # 📊 Vite + React Admin Dashboard
+│   ├── src/pages/              # Admin Views (Insights, Farmers, BotMonitor, Advisory, Weather)
+│   └── src/components/         # Reusable UI components & Layout
+├── data/                       # 📁 Storage for ML models (price_model.pkl) and datasets
+├── docs/                       # 📄 Academic results and system documentation
+├── results/                    # 📈 Benchmark CSVs and evaluation charts
+├── artifacts/                  # 📄 Audit evidence transcripts (live_backend_e2e_transcript.md)
+├── scripts/                    # ⚙️ Training, DB init, RAG seed, and benchmark scripts
+├── tests/                      # 🛡️ Pytest suite for core logic & NLU guardrails
 └── requirements.txt            # Python dependencies
 ```
 
@@ -48,61 +59,50 @@ kisanmitra/
 
 ## 🚀 How to Run Locally
 
-Since this project avoids complex orchestrators, getting started locally is incredibly straightforward.
-
 ### 1. Backend (FastAPI) Setup
-1. **Create a virtual environment & install dependencies:**
-   ```bash
-   python -m venv venv
-   source venv/bin/activate
-   pip install -r requirements.txt
-   ```
-2. **Configure Environment Variables:**
-   Ensure you have your Gemini API keys and PostgreSQL credentials configured in the **root `.env`** file.
-3. **Initialize the Database:**
-   *(Ensure you have a local PostgreSQL instance running with the pgvector extension).*
-   ```bash
-   # Create tables & import survey records
-   python scripts/00_init_db.py
-   python scripts/04_sync_surveys.py
-   
-   # Run the ML pipeline to download data, clean it, and train the model
-   python scripts/01_download_data.py
-   python scripts/02_clean_data.py
-   python scripts/03_train_model.py
-   ```
-4. **Start the API Server:**
-   ```bash
-   uvicorn backend.main:app --host 127.0.0.1 --port 8000
-   ```
+```bash
+# 1. Activate virtual environment
+source venv/bin/activate
+pip install -r requirements.txt
 
-### 2. Frontend (Vite Dashboard) Setup
-Open a new terminal window:
+# 2. Start API Server
+venv/bin/uvicorn backend.main:app --host 127.0.0.1 --port 8000
+```
+
+### 2. Telegram Bot Setup
+```bash
+source venv/bin/activate
+venv/bin/python -m telegram_bot.bot
+```
+
+### 3. Frontend (Vite Dashboard) Setup
 ```bash
 cd frontend
 npm install
 npm run dev
 ```
-The dashboard will be available at **http://localhost:3000**.
+Dashboard available at **http://localhost:3000**.
 
 ---
 
-## 🛡️ Testing the System
-We use `pytest` to guarantee that our core logic (specifically, the deterministic message routing and fuzzy Kannada matching) never breaks.
+## 🛡️ Testing & Benchmarks
+
+Run the unit test suite:
 ```bash
-source venv/bin/activate
-PYTHONPATH=. pytest tests/
+PYTHONPATH=. venv/bin/pytest tests/
+```
+
+Run the 1,000-case procedural stress benchmark:
+```bash
+PYTHONPATH=. venv/bin/python scripts/generate_and_stress_test_1000.py
+```
+
+Run the 25-case live HTTP E2E transcript audit:
+```bash
+PYTHONPATH=. venv/bin/python scripts/test_live_backend_e2e.py
 ```
 
 ---
 
-## 📡 Webhook Integration
-To connect this local instance to Meta's WhatsApp API, use a tunneling service like **Ngrok**:
-```bash
-ngrok http 8000
-```
-Update your Meta Developer Console with the generated Ngrok URL (append `/webhook/whatsapp` to the URL).
-
----
 ## 📜 License
 Distributed under the MIT License.

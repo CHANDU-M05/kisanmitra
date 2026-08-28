@@ -1,3 +1,9 @@
+"""
+backend/core/database.py — SQLAlchemy Async Database Engine & Session Management
+
+Manages PostgreSQL connection pooling, async sessions, ORM DeclarativeBase,
+and FastAPI get_db dependency injection with automatic transaction rollback.
+"""
 from __future__ import annotations
 
 from collections.abc import AsyncGenerator
