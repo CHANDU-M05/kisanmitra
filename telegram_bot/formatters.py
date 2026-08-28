@@ -54,15 +54,21 @@ def format_forecast(r: dict) -> str:
 def format_anomaly(r: dict) -> str:
     a_type = r.get("anomaly_type", "SPIKE")
     icon   = "🚀" if a_type == "SPIKE" else "💥"
+    direction = "📈" if r.get("forecast", 0) > r.get("current_price", 0) else "📉"
+    msp_line  = f"\nMSP Floor: ₹{r['msp_floor']:,.0f}/q" if r.get("msp_floor") else ""
     return (
-        f"⚠️ *Anomaly Alert — {a_type}* {icon}\n\n"
-        f"*{r['crop']}* in {r['district']}\n"
-        f"Today: ₹{r['current_price']:,.0f} → Forecast: ₹{r['forecast']:,.0f}\n"
-        f"Deviation: *{r['deviation_pct']:.1f}%* (threshold: 30%)\n\n"
-        f"This forecast shows an unusually large price movement. "
-        f"*Automated broadcasts have been suppressed* pending expert review.\n\n"
-        f"Please consult your Krishi Vigyan Kendra (KVK) or local extension officer "
-        f"before making sowing decisions based on this alert.\n\n"
+        f"*{r['crop']} — 60-Day Forecast* {direction}\n"
+        f"District: {r['district']}\n"
+        f"━━━━━━━━━━━━━━━━━━\n"
+        f"Today's Price: ₹{r['current_price']:,.0f}/quintal\n"
+        f"Forecast: *₹{r['forecast']:,.0f}* (₹{r.get('lower', r['forecast']*0.85):,.0f}–₹{r.get('upper', r['forecast']*1.15):,.0f})\n"
+        f"Signal: {r.get('signal', 'NEUTRAL')}\n"
+        f"{r.get('signal_kannada', '')}\n"
+        f"━━━━━━━━━━━━━━━━━━\n"
+        f"Model Reliability: {_reliability(r.get('crop_mape_pct'))}{msp_line}\n\n"
+        f"⚠️ *Anomaly Alert — {a_type}* {icon}\n"
+        f"Deviation: *{r['deviation_pct']:.1f}%* (threshold: 30%)\n"
+        f"This forecast shows a large price movement. "
         f"_Human-in-the-Loop Validation Active — KisanMitra 🌾_"
     )
 

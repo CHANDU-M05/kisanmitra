@@ -62,7 +62,25 @@ def get_offline_fallback(query: str, crop: str | None) -> tuple[str, str]:
     if is_kn:
         suffix = "🌾 (ಆಫ್‌ಲೈನ್ ಸಲಹೆ)"
 
-        # 1. Potato Potash & Tuber Enlargement
+        # 1. Stem Rot & Thundu Roga (Potato/Tomato)
+        if any(kw in q for kw in ["thundu", "stem rot", "thundu roga", "ಕಾಂಡ ಕೊಳೆ"]):
+            return (
+                "📋 **ಕಾಂಡ ಕೊಳೆ ಮತ್ತು ತುಂಡು ರೋಗ ನಿರ್ವಹಣೆ (Stem Rot / Thundu Roga Guide)**:\n"
+                "• **ವಿಷಯ**: ಮಣ್ಣಿನಲ್ಲಿ ಬೆಳೆಯುವ ಸ್ಕ್ಲೆರೋಷಿಯಂ (Sclerotium) ಶೀಲಿಂಧ್ರದಿಂದ ಕಾಂಡ ತಳಭಾಗದಲ್ಲಿ ಕೊಳೆತು ಗಿಡ ಮುರಿದು ಬೀಳುತ್ತದೆ.\n"
+                "• **ಕ್ರಮಗಳು**: ಕಾರ್ಬಂಡಾಜಿಮ್ 50 WP (1g/L) ಅಥವಾ ಸೈಪ್ರೊಕೊನಜೋಲ್ (1ml/L) ಕಾಂಡದ ಬುಡಕ್ಕೆ ನೀಡಿ. ಟ್ರೈಕೋಡರ್ಮಾ ಹರ್ಜಿಯಾನಮ್ (2kg/ಎಕರೆ) ಗೊಬ್ಬರದ ಜೊತೆ ನೀಡಿ.\n"
+                "• **ಟಿಪ್**: ಜಮೀನಿನಲ್ಲಿ ನೀರು ನಿಲ್ಲದಂತೆ ನೋಡಿಕೊಳ್ಳಿ ಮತ್ತು ಸೋಂಕಿತ ಗಿಡಗಳನ್ನು ತಕ್ಷಣ ಕಿತ್ತು ನಾಶಪಡಿಸಿ.", suffix
+            )
+
+        # 2. Root-Knot Nematode & Gantu Hula (Brinjal/Capsicum)
+        if any(kw in q for kw in ["gantu", "nematode", "nematodes", "gantu hula", "ಗಂಟು ಹುಳು"]):
+            return (
+                "📋 **ಬೇರು ಗಂಟು ಹುಳು ನಿರ್ವಹಣೆ (Root-Knot Nematode / Gantu Hula Guide)**:\n"
+                "• **ವಿಷಯ**: ಮಣ್ಣಿನಲ್ಲಿರುವ ನೆಮಟೋಡ್ಸ್ (Nematodes) ಬೇರುಗಳಲ್ಲಿ ಗಂಟುಗಳನ್ನು ಉಂಟುಮಾಡಿ ಗಿಡ ಹಳದಿಯಾಗುವಂತೆ ಮಾಡುತ್ತವೆ.\n"
+                "• **ಕ್ರಮಗಳು**: ಪ್ಯೂಸಿಲೋಮೈಸಿಸ್ ಲೈಲಾಸಿನಸ್ (2kg/ಎಕರೆ) ಜೈವಿಕ ನೆಮಟಿಸೈಡ್ ಅಥವಾ ಫ್ಲೂಪೈರಾಮ್ (Fluopyram @ 1ml/L) ಬೇರಿಗೆ ನೀಡಿ.\n"
+                "• **ಟಿಪ್**: ಸಾಲುಗಳ ಮಧ್ಯೆ ಚೆಂಡುಹೂ (Marigold) ಬೆಳೆಯುವುದರಿಂದ ನೆಮಟೋಡ್ಸ್ ಸಂಖ್ಯೆ ಗಣನೀಯವಾಗಿ ಕಡಿಮೆಯಾಗುತ್ತದೆ.", suffix
+            )
+
+        # 3. Potato Potash & Tuber Enlargement
         if any(kw in q for kw in ["ದಪ್ಪ", "ಪೊಟ್ಯಾಶ್", "ಗಡ್ಡೆ", "potash", "tuber", "size"]):
             return (
                 "📋 **ಆಲೂಗಡ್ಡೆ ಗಡ್ಡೆ ದಪ್ಪಗಾಗಿಸುವ ಮತ್ತು ಪೊಟ್ಯಾಶ್ ನಿರ್ವಹಣೆ (Potato Tuber Bulking & Potash Guide)**:\n"
@@ -71,7 +89,7 @@ def get_offline_fallback(query: str, crop: str | None) -> tuple[str, str]:
                 "• **ಟಿಪ್**: ಮಣ್ಣಿಗೆ ಪ್ರತಿ ಎಕರೆಗೆ 30 ಕೆಜಿ MOP ಗೊಬ್ಬರ ನೀಡಿ ಮತ್ತು ಹಗುರವಾಗಿ ನೀರು ಹಾಯಿಸಿ.", suffix
             )
 
-        # 2. Capsicum/Tomato Wilt & Drenching
+        # 4. Capsicum/Tomato Wilt & Drenching
         if any(kw in q for kw in ["sudu", "sagida", "ವೈಲ್ಟ್", "drenching", "drench", "bactericide", "ಸಿಂಪಡಿಸಿ"]):
             return (
                 "📋 **ಬ್ಯಾಕ್ಟೀರಿಯಲ್ ವೈಲ್ಟ್ ಮತ್ತು ವಾಡಿ ಹೋಗುವ ರೋಗ ನಿರ್ವಹಣೆ (Bacterial Wilt & Drenching Guide)**:\n"
@@ -118,12 +136,39 @@ def get_offline_fallback(query: str, crop: str | None) -> tuple[str, str]:
     else:
         suffix = "🌾 (Offline Advice)"
 
-        # 1. Onion Thrips, Downy Mildew & Nematodes
-        if any(kw in q for kw in ["downy mildew", "nematode", "nematodes", "trichoderma", "purple blotch", "neck rot"]):
+        # 0. Stem Rot & Thundu Roga (Potato/Tomato)
+        if any(kw in q for kw in ["thundu", "stem rot", "thundu roga", "sclerotium"]):
             return (
-                "📋 **Onion Thrips, Downy Mildew & Nematode Control**:\n"
-                "• **Overview**: Thrips cause silvery patches while downy mildew and nematodes reduce root uptake.\n"
-                "• **Actionable Steps**: Spray Fipronil (2ml/L) or Spinetoram (0.9ml/L) for thrips. Drench *Trichoderma viride* (2kg/acre in FYM).\n"
+                "📋 **Stem Rot & Thundu Roga Management**:\n"
+                "• **Overview**: Soil-borne *Sclerotium rolfsii* fungus causes collar rot, wilting, and stem collapse.\n"
+                "• **Actionable Steps**: Drench root zone with Carbendazim 50 WP (1g/L) or Tebuconazole (1ml/L). Enrich soil with *Trichoderma harzianum* (2kg/acre in 100kg FYM).\n"
+                "• **Cautions**: Remove infected plants immediately and avoid water stagnation near plant stems."
+            ), suffix
+
+        # 0b. Root-Knot Nematodes & Gantu Hula
+        if any(kw in q for kw in ["gantu", "nematode", "nematodes", "gantu hula", "root-knot"]):
+            return (
+                "📋 **Root-Knot Nematodes & Gantu Hula Management**:\n"
+                "• **Overview**: *Meloidogyne* nematodes form galls on roots, restricting water and nutrient uptake.\n"
+                "• **Actionable Steps**: Apply bio-nematicide *Purpureocillium lilacinum* (2kg/acre) or Fluopyram (1ml/L) via drip irrigation.\n"
+                "• **Cautions**: Intercrop Marigold as a trap crop — root exudates naturally kill nematode larvae."
+            ), suffix
+
+        # 0c. Crop Rotation & Nitrogen Restoration
+        if any(kw in q for kw in ["rotate", "rotation", "restore nitrogen", "ragi or groundnut", "after harvesting"]):
+            return (
+                "📋 **Kharif Crop Rotation & Soil Nitrogen Restoration**:\n"
+                "• **Overview**: Rotating heavy-feeding cereals (Maize/Ragi) with legumes (Groundnut/Cowpea) restores soil organic nitrogen.\n"
+                "• **Actionable Steps**: Rotate post-Kharif Maize with Groundnut or Cowpea. Legume root nodules fix atmospheric nitrogen (20–40 kg N/ha).\n"
+                "• **Cautions**: Treat legume seeds with *Rhizobium* culture (200g/acre) prior to sowing for maximum nitrogen fixation."
+            ), suffix
+
+        # 1. Onion Thrips, Downy Mildew & Nematodes
+        if any(kw in q for kw in ["downy mildew", "trichoderma", "purple blotch", "neck rot"]):
+            return (
+                "📋 **Onion Thrips, Downy Mildew & Neck Rot Control**:\n"
+                "• **Overview**: Thrips cause silvery patches while downy mildew and neck rot degrade bulb quality.\n"
+                "• **Actionable Steps**: Spray Fipronil (2ml/L) or Spinetoram (0.9ml/L) for thrips. Spray Saaf (2g/L) for rot.\n"
                 "• **Cautions**: Spray Metalaxyl + Mancozeb (2.5g/L) for downy mildew with a spreader sticker (0.5ml/L)."
             ), suffix
 

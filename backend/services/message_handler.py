@@ -128,26 +128,35 @@ def resolve_district(text: str) -> Optional[str]:
     GUARDRAIL 1: Return canonical district ID or None.
     Priority: direct substring alias match -> canonical name match -> fuzzy fallback.
     """
+    all_d = resolve_all_districts(text)
+    return all_d[0] if all_d else None
+
+
+def resolve_all_districts(text: str) -> list[str]:
+    """Extract all mentioned canonical district names from text."""
     tl = text.lower().strip()
+    found = []
     for alias, key in _DISTRICT_ALIASES.items():
         if alias in tl:
-            return CANONICAL_DISTRICTS[key]
+            can = CANONICAL_DISTRICTS[key]
+            if can not in found:
+                found.append(can)
     for key, canonical in CANONICAL_DISTRICTS.items():
-        if key in tl:
-            return canonical
-    return None
+        if key in tl and canonical not in found:
+            found.append(canonical)
+    return found
 
 
-def extract_area(text: str) -> float:
-    """Extract the first valid numeric value from text (area in acres)."""
-    nums = re.findall(r"\d+(?:\.\d+)?", text)
-    if nums:
+def extract_area(text: str) -> Optional[float]:
+    """Extract numeric acreage ONLY if explicitly associated with acre keywords."""
+    match = re.search(r"(\d+(?:\.\d+)?)\s*(?:acre|acres|ಎಕರೆ)", text, re.IGNORECASE)
+    if match:
         try:
-            val = float(nums[0])
-            return val if val > 0 else 1.0
+            val = float(match.group(1))
+            return val if val > 0 else None
         except ValueError:
-            return 1.0
-    return 1.0
+            return None
+    return None
 
 
 # ══════════════════════════════════════════════════════════

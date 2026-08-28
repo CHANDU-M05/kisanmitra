@@ -173,18 +173,16 @@ async def conversation_message(
                 }
 
         elif parsed.intent == Intent.SATURATION_CHECK:
-            result = await _handle_saturation(crop, district, db)
+            result = await _handle_saturation(crop, district, db, raw_text=body.text)
 
         elif parsed.intent == Intent.AGRONOMY_ADVICE:
             advice = await get_agronomy_advice(body.text, db, crop=crop, phone_number=body.sender_id)
             result = {"type": "advisory", "text": advice, "crop": crop}
 
         else:
-            if not (body.crop or parsed.crop or body.district or parsed.district):
-                result = {"type": "help"}
-            else:
-                advice = await get_agronomy_advice(body.text, db, crop=crop, phone_number=body.sender_id)
-                result = {"type": "advisory", "text": advice, "crop": crop}
+            # UNKNOWN intent (greetings, smalltalk, or unparsed text): ALWAYS return help menu!
+            # Never execute RAG advisory or carry over stale crop advice for greetings/smalltalk.
+            result = {"type": "help"}
 
     except Exception as exc:
         logger.exception("Conversation engine error for sender=%s: %s", body.sender_id, exc)
@@ -482,8 +480,6 @@ async def _handle_declare(
     is_update = prior is not None  # prior exists but is old → farmer is updating area
 
     # ── Upsert — atomically insert or update area on conflict ──────────────
-    # ON CONFLICT uses index_elements matching the functional unique index
-    # ON CONFLICT (lower(phone), lower(crop), lower(district), season).
     stmt = (
         pg_insert(CropDeclaration)
         .values(
@@ -507,8 +503,6 @@ async def _handle_declare(
             set_={
                 "area_acres":  area,
                 "farmer_name": farmer_name,
-                # declared_at intentionally not updated — the original timestamp
-                # is preserved so the 60s SELECT window still works on further retries.
             },
         )
     )
@@ -535,7 +529,29 @@ async def _handle_declare(
     }
 
 
-async def _handle_saturation(crop: str, district: str, db: AsyncSession) -> dict:
+async def _handle_saturation(crop: str, district: str, db: AsyncSession, raw_text: str = "") -> dict:
+    all_d = mh.resolve_all_districts(raw_text) if raw_text else []
+    if len(all_d) > 1:
+        comp_results = []
+        season = _current_season()
+        for d in all_d[:3]:
+            sat_item = await farmer_service.calc_saturation(d, crop, season, db)
+            comp_results.append(f"• {d}: {sat_item['saturation_pct']:.0f}% ({sat_item['risk_level']} Risk)")
+        
+        comp_text = "\n".join(comp_results)
+        primary_sat = await farmer_service.calc_saturation(district, crop, season, db)
+        return {
+            "type":           "saturation",
+            "crop":           crop,
+            "district":       f"{district} vs {', '.join(all_d[1:])}",
+            "saturation_pct": primary_sat["saturation_pct"],
+            "risk_level":     primary_sat["risk_level"],
+            "risk_kannada":   f"📊 **Multi-District Comparison:**\n{comp_text}",
+            "farmer_count":   primary_sat["farmer_count"],
+            "total_area":     primary_sat["total_area"],
+            "emoji":          primary_sat["emoji"],
+        }
+
     sat = await farmer_service.calc_saturation(district, crop, _current_season(), db)
     return {
         "type":           "saturation",
