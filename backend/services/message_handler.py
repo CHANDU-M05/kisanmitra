@@ -130,7 +130,9 @@ _FUZZY_THRESHOLD = 75   # minimum score (0-100) to accept a fuzzy match
 def resolve_crop(text: str) -> Optional[str]:
     """
     GUARDRAIL 1: Return canonical crop ID or None.
-    Priority: main cash crop position -> trap crop fallback.
+    Priority: main cash crop position -> word boundary alias match.
+    Uses \b word boundary for ASCII terms (e.g. 'ragi' in 'kalaburagi') and
+    substring matching for Unicode/Kannada script terms.
     """
     tl = text.lower().strip()
     
@@ -139,23 +141,31 @@ def resolve_crop(text: str) -> Optional[str]:
     
     # Check if a primary cash crop is present
     for main_crop in PRIMARY_CROPS:
-        if main_crop.lower() in tl:
+        if re.search(r"\b" + re.escape(main_crop.lower()) + r"\b", tl):
             return main_crop
             
     earliest_idx = len(tl) + 1
     matched_crop = None
 
     for alias, key in _CROP_ALIASES.items():
-        pos = tl.find(alias)
-        if pos != -1 and pos < earliest_idx:
-            earliest_idx = pos
-            matched_crop = CANONICAL_CROPS[key]
+        is_ascii = alias.isascii()
+        pattern = r"\b" + re.escape(alias.lower()) + r"\b" if is_ascii else re.escape(alias.lower())
+        match = re.search(pattern, tl)
+        if match:
+            pos = match.start()
+            if pos < earliest_idx:
+                earliest_idx = pos
+                matched_crop = CANONICAL_CROPS[key]
 
     for key, canonical in CANONICAL_CROPS.items():
-        pos = tl.find(key)
-        if pos != -1 and pos < earliest_idx:
-            earliest_idx = pos
-            matched_crop = canonical
+        is_ascii = key.isascii()
+        pattern = r"\b" + re.escape(key.lower()) + r"\b" if is_ascii else re.escape(key.lower())
+        match = re.search(pattern, tl)
+        if match:
+            pos = match.start()
+            if pos < earliest_idx:
+                earliest_idx = pos
+                matched_crop = canonical
 
     return matched_crop
 
