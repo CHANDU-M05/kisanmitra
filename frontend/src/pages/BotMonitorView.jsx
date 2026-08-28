@@ -164,7 +164,7 @@ export default function BotMonitorView() {
                           </div>
                         </div>
 
-                        <p className="leading-relaxed whitespace-pre-wrap text-slate-900">{log.message_content}</p>
+                        <p className="leading-relaxed whitespace-pre-wrap text-slate-900 dark:text-slate-100">{log.message_content}</p>
 
                         {isAssistant && log.feedback_score !== null && (
                           <div className="mt-2 pt-1.5 border-t border-slate-200/60 dark:border-white/5 flex items-center gap-1 text-[9px] font-bold uppercase font-mono text-slate-600">

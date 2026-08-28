@@ -292,7 +292,7 @@ export default function AdvisoryView() {
               </div>
             ) : response ? (
               <div className="space-y-4">
-                <div className="leading-relaxed text-sm text-slate-950 bg-emerald-50/15 border border-emerald-200/50 p-5 rounded-2xl shadow-inner font-sans whitespace-pre-wrap animate-fade-in">
+                <div className="leading-relaxed text-sm text-slate-950 dark:text-slate-100 bg-emerald-50/15 border border-emerald-200/50 dark:bg-emerald-500/10 dark:border-emerald-500/20 p-5 rounded-2xl shadow-inner font-sans whitespace-pre-wrap animate-fade-in">
                   {response}
                 </div>
                 
