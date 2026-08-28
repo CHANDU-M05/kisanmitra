@@ -200,9 +200,9 @@ _SATURATION_KEYWORDS = [
     "across all farmers", "registered in", "how many total acres", "this season"
 ]
 _DECLARE_KEYWORDS = [
-    "declare", "ಬೆಳೆ ಹಾಕಿದ್ದೇನೆ", "ನಾನು ಬೆಳೆ", "crop sown", "planted", "sown", "hakidini", "ಹಾಕಿದಿನಿ", "ಹಾಕಿದ್ದೇನೆ",
-    "register my crop", "record madi", "ನೋಂದಣಿ", "record this", "register this", "record entry", "record in database",
-    "database", "register", "record", "save"
+    "declare", "sowed", "sown", "planted", "hakidini", "ಹಾಕಿದಿನಿ", "ಹಾಕಿದ್ದೇನೆ",
+    "ಬೆಳೆ ಹಾಕಿದ್ದೇನೆ", "ನಾನು ಬೆಳೆ", "register my crop", "record entry", "record in database",
+    "crop sown", "planted crop"
 ]
 # Only agronomy questions go to the LLM
 _AGRONOMY_KEYWORDS = [
@@ -210,13 +210,13 @@ _AGRONOMY_KEYWORDS = [
     "disease", "rot", "blight", "wilt", "borer", "virus", "pest", "thrips", "nematode", "nematodes", "root-knot", "root knot",
     "fertilizer", "fertilizers", "dose", "dosage", "npk", "urea", "dap", "mop", "ratio", "basal", "fym",
     "boron", "metalaxyl", "mancozeb", "copper", "oxychloride", "pesticide", "fungicide",
-    "insecticide", "rain", "monsoon", "seed", "irrigation", "water", "watering",
+    "insecticide", "monsoon", "seed", "irrigation", "water", "watering",
     "soil", "loam", "nitrogen", "phosphorus", "potassium", "gypsum", "advice",
     "treatment", "prevention", "control", "drenching", "application", "spray", "spraying",
     "yellow", "leaves", "leaf", "rotate", "rotation", "harvest", "harvesting", "spacing",
     "care", "grow", "manage", "tips", "yield", "exact dosage", "recommended", "intercrop", "intercropping",
     # Kannada script terms
-    "ರೋಗ", "ಕೊಳೆ", "ಕರಕು", "ಕುತ್ತಿಗೆ", "ಗೊಬ್ಬರ", "ಕೀಟನಾಶಕ", "ಔಷಧಿ", "ಮಳೆ", "ಬೀಜ",
+    "ರೋಗ", "ಕೊಳೆ", "ಕರಕು", "ಕುತ್ತಿಗೆ", "ಗೊಬ್ಬರ", "ಕೀಟನಾಶಕ", "ಔಷಧಿ", "ಬೀಜ",
     "ನೀರಾವರಿ", "ಮಣ್ಣು", "ಸಲಹೆ", "ಇಳುವರಿ", "ಹೆಚ್ಚಿಸಲು", "ಸಲಹೆಗಳು", "ನೀರು", "ನಿಯಂತ್ರಣ", "ಕಟಾವು", "ಹುಳು",
     "ಸೈನಿಕ ಹುಳು", "ಗಂಟು ಹುಳು", "ಎಲೆ", "ಹಳದಿ", "ಸಿಂಪಡಿಸಬೇಕು", "ಪ್ರಮಾಣ",
     # Kanglish (Romanized Kannada) terms
@@ -246,17 +246,17 @@ def parse(text: str) -> ParsedMessage:
     district = resolve_district(text)
     area     = extract_area(text)
 
-    # 1. Non-agronomic / General / Travel / Geography / Smalltalk -> UNKNOWN -> Help Menu
+    # 1. Non-agronomic / General / Travel / Geography / Weather / Smalltalk -> UNKNOWN -> Help Menu
     _NON_AGRI_TERMS = [
-        "umbrella", "geography", "history", "travel", "coffee", "restaurant", "hotel", "cricket",
+        "umbrella", "geography", "history", "travel", "coffee", "restaurant", "hotel", "cricket", "rain", "weather",
         "namaskara", "hegideera", "bombat", "hello", "hi", "hey", "good morning", "good evening",
         "thanks", "thank you", "what can you do", "helping farmers", "how is kisanmitra", "about kisanmitra", "who are you"
     ]
     has_non_agri = any(term in tl for term in _NON_AGRI_TERMS)
     has_agri_kw = any(kw in tl for kw in _PRICE_KEYWORDS + _SATURATION_KEYWORDS + _DECLARE_KEYWORDS + _AGRONOMY_KEYWORDS)
     
-    # Critical Rule: If there is NO crop AND NO explicit agricultural keyword, ALWAYS return UNKNOWN!
-    if has_non_agri or not (crop or has_agri_kw):
+    # Critical Rule: If text has non-agri terms or lacks both crop AND agronomy keywords, ALWAYS return UNKNOWN!
+    if (has_non_agri and not crop) or not (crop or has_agri_kw):
         return ParsedMessage(
             intent   = Intent.UNKNOWN,
             crop     = crop,

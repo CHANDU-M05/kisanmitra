@@ -125,7 +125,7 @@ async def conversation_message(
         db=db,
         raw_text=body.text or synthetic_text,
     )
-    area = body.area or parsed.area or 1.0
+    area = body.area or parsed.area
     is_fallback_default = crop_used_def or dist_used_def
 
     # CRITICAL GUARD: Intent carryover ONLY triggers if the user explicitly provided an entity
@@ -297,6 +297,7 @@ async def _get_previous_intent(sender_id: str, channel: str, db: AsyncSession) -
             ChatHistory.channel == channel,
             ChatHistory.intent_category.isnot(None),
             ChatHistory.intent_category != Intent.UNKNOWN.name,
+            ChatHistory.intent_category != Intent.DECLARE_CROP.name,
             ChatHistory.created_at >= cutoff,
         )
         .order_by(ChatHistory.created_at.desc())
@@ -431,9 +432,12 @@ async def _handle_price(crop: str, district: str, db: AsyncSession) -> dict:
 
 
 async def _handle_declare(
-    sender_id: str, crop: str, district: str, area: float, db: AsyncSession,
+    sender_id: str, crop: str, district: str, area: Optional[float], db: AsyncSession,
     channel: str = "web", farmer_name: Optional[str] = None,
 ) -> dict:
+    if area is None or area <= 0:
+        return await _handle_saturation(crop, district, db)
+
     season = _current_season()
     if farmer_name and farmer_name.strip():
         cleaned = re.sub(r"[\r\n\t\x00-\x1f]", " ", farmer_name.strip())
