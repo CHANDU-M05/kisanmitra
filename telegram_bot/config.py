@@ -36,7 +36,7 @@ REDIS_URL: str = os.getenv("REDIS_URL", "redis://localhost:6379/1")
 BACKEND_URL: str = os.getenv("BACKEND_URL", "http://localhost:8000")
 
 # Timeout for backend HTTP calls (seconds)
-BACKEND_TIMEOUT: float = float(os.getenv("BACKEND_TIMEOUT", "12.0"))
+BACKEND_TIMEOUT: float = float(os.getenv("BACKEND_TIMEOUT", "45.0"))
 
 # Webhook mode vs long-polling. Set TELEGRAM_WEBHOOK_URL in production.
 WEBHOOK_URL: str = os.getenv("TELEGRAM_WEBHOOK_URL", "")

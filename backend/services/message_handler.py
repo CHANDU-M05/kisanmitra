@@ -208,13 +208,25 @@ def parse(text: str) -> ParsedMessage:
     Numeric/market intents are resolved here deterministically.
     Only AGRONOMY_ADVICE is allowed to reach the RAG layer.
     """
+    # Clean up quotes and explanatory notes in parentheses
+    text = text.strip('"\'“”')
     tl = text.lower()
 
     crop     = resolve_crop(text)
     district = resolve_district(text)
 
-    # Priority order matters — declare check before price check
-    # so "2 acres tomato" is not confused with a price query.
+    # 1. Agronomy check MUST come first so questions like
+    # "How much fertilizer for 2 acres of tomato" route to Agronomy AI, NOT declaration.
+    if any(kw in tl for kw in _AGRONOMY_KEYWORDS):
+        return ParsedMessage(
+            intent   = Intent.AGRONOMY_ADVICE,
+            crop     = crop,
+            district = district,
+            area     = None,
+            raw_text = text,
+        )
+
+    # 2. Sowing declaration check
     if crop and any(kw in tl for kw in _DECLARE_KEYWORDS):
         return ParsedMessage(
             intent   = Intent.DECLARE_CROP,
@@ -224,6 +236,7 @@ def parse(text: str) -> ParsedMessage:
             raw_text = text,
         )
 
+    # 3. Price query check
     if any(kw in tl for kw in _PRICE_KEYWORDS):
         return ParsedMessage(
             intent   = Intent.PRICE_QUERY,
@@ -233,6 +246,7 @@ def parse(text: str) -> ParsedMessage:
             raw_text = text,
         )
 
+    # 4. Saturation risk check
     if any(kw in tl for kw in _SATURATION_KEYWORDS):
         return ParsedMessage(
             intent   = Intent.SATURATION_CHECK,
@@ -242,18 +256,8 @@ def parse(text: str) -> ParsedMessage:
             raw_text = text,
         )
 
-    if any(kw in tl for kw in _AGRONOMY_KEYWORDS) or len(tl.split()) > 2:
-        return ParsedMessage(
-            intent   = Intent.AGRONOMY_ADVICE,
-            crop     = crop,
-            district = district,
-            area     = None,
-            raw_text = text,
-        )
-
-    # Crop mentioned without explicit declare keyword →
-    # treat as implicit declaration if area number present
-    if crop and re.search(r"[\d.]+", text):
+    # 5. Implicit declaration if crop and number are mentioned without explicit intent
+    if crop and re.search(r"[\d.]+\s*(acre|acres|ಎಕರೆ)?", text, re.IGNORECASE):
         return ParsedMessage(
             intent   = Intent.DECLARE_CROP,
             crop     = crop,
@@ -262,9 +266,10 @@ def parse(text: str) -> ParsedMessage:
             raw_text = text,
         )
 
-    if any(kw in tl for kw in _AGRONOMY_KEYWORDS):
+    # 6. Fallback free-text queries > 2 words route to Agronomy AI
+    if len(tl.split()) > 2:
         return ParsedMessage(
-            intent   = Intent.AGRONOMY_ADVICE,   # ← ONLY path to LLM
+            intent   = Intent.AGRONOMY_ADVICE,
             crop     = crop,
             district = district,
             area     = None,
