@@ -165,12 +165,21 @@ def get_offline_fallback(query: str, crop: str | None) -> tuple[str, str]:
             ), suffix
 
         # 0c. Crop Rotation & Nitrogen Restoration
-        if any(kw in q for kw in ["rotate", "rotation", "restore nitrogen", "ragi or groundnut", "after harvesting"]):
+        if any(kw in q for kw in ["rotate", "rotation", "restore nitrogen", "ragi or groundnut", "after harvesting", "post-kharif"]):
             return (
                 "📋 **Kharif Crop Rotation & Soil Nitrogen Restoration**:\n"
                 "• **Overview**: Rotating heavy-feeding cereals (Maize/Ragi) with legumes (Groundnut/Cowpea) restores soil organic nitrogen.\n"
                 "• **Actionable Steps**: Rotate post-Kharif Maize with Groundnut or Cowpea. Legume root nodules fix atmospheric nitrogen (20–40 kg N/ha).\n"
                 "• **Cautions**: Treat legume seeds with *Rhizobium* culture (200g/acre) prior to sowing for maximum nitrogen fixation."
+            ), suffix
+
+        # 0ca. Maize Fall Armyworm (FAW) Whorl Treatment
+        if c == "maize" or any(kw in q for kw in ["fall armyworm", "faw", "spodoptera", "whorl"]):
+            return (
+                "📋 **Maize Fall Armyworm (FAW / Spodoptera) Whorl Treatment**:\n"
+                "• **Overview**: Invasive Fall Armyworm (*Spodoptera frugiperda*) larvae feed inside central plant whorls causing leaf damage.\n"
+                "• **Actionable Steps**: Apply Emamectin Benzoate 5% SG (0.4g/L water) or Chlorantraniliprole 18.5% SC (0.4ml/L water) directly into plant central whorls.\n"
+                "• **Cautions**: Apply spray early morning or late evening when caterpillars are actively feeding inside whorls."
             ), suffix
 
         # 0d. Tomato & Marigold Trap Crop Intercropping

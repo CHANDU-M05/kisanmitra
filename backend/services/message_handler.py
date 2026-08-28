@@ -130,16 +130,34 @@ _FUZZY_THRESHOLD = 75   # minimum score (0-100) to accept a fuzzy match
 def resolve_crop(text: str) -> Optional[str]:
     """
     GUARDRAIL 1: Return canonical crop ID or None.
-    Priority: direct substring alias match -> canonical name match -> fuzzy fallback.
+    Priority: main cash crop position -> trap crop fallback.
     """
     tl = text.lower().strip()
+    
+    # Primary cash crops take precedence over trap crops (e.g. Marigold)
+    PRIMARY_CROPS = ["Tomato", "Potato", "Onion", "Maize", "Groundnut", "Capsicum", "Cabbage", "Brinjal"]
+    
+    # Check if a primary cash crop is present
+    for main_crop in PRIMARY_CROPS:
+        if main_crop.lower() in tl:
+            return main_crop
+            
+    earliest_idx = len(tl) + 1
+    matched_crop = None
+
     for alias, key in _CROP_ALIASES.items():
-        if alias in tl:
-            return CANONICAL_CROPS[key]
+        pos = tl.find(alias)
+        if pos != -1 and pos < earliest_idx:
+            earliest_idx = pos
+            matched_crop = CANONICAL_CROPS[key]
+
     for key, canonical in CANONICAL_CROPS.items():
-        if key in tl:
-            return canonical
-    return None
+        pos = tl.find(key)
+        if pos != -1 and pos < earliest_idx:
+            earliest_idx = pos
+            matched_crop = canonical
+
+    return matched_crop
 
 
 def resolve_district(text: str) -> Optional[str]:
