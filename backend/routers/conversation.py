@@ -300,21 +300,53 @@ async def _get_previous_intent(sender_id: str, channel: str, db: AsyncSession) -
 
 # ── Intent sub-handlers ───────────────────────────────────
 
+_DISTRICT_ALIASES: dict[str, list[str]] = {
+    "Tumakuru": ["Tumkur", "Tumakuru"],
+    "Shivamogga": ["Shimoga", "Shivamogga"],
+    "Bengaluru Urban": ["Bangalore", "Bengaluru"],
+    "Bengaluru Rural": ["Bangalore", "Bengaluru"],
+    "Belagavi": ["Belgaum", "Belagavi"],
+    "Mysuru": ["Mysore", "Mysuru"],
+    "Ballari": ["Bellary", "Ballari"],
+    "Vijayapura": ["Bijapur", "Vijayapura"],
+    "Kalaburagi": ["Gulbarga", "Kalaburagi"],
+}
+
 async def _handle_price(crop: str, district: str, db: AsyncSession) -> dict:
     if ml_service.MODEL is None:
         return {"type": "error", "detail": "Model not loaded. Run scripts/03_train_model.py first."}
 
+    from sqlalchemy import or_
+
+    c_pattern = f"%{crop.split()[0]}%"
+    d_targets = _DISTRICT_ALIASES.get(district, [district, district[:5]])
+    d_conditions = [MandiPrice.district.ilike(f"%{d}%") for d in d_targets]
+
     price_row = await db.execute(
         select(MandiPrice.modal_price)
         .where(
-            MandiPrice.commodity.ilike(crop),
-            MandiPrice.district.ilike(district),
+            MandiPrice.commodity.ilike(c_pattern),
+            or_(*d_conditions),
             MandiPrice.modal_price.isnot(None),
         )
         .order_by(MandiPrice.arrival_date.desc())
         .limit(1)
     )
     latest = price_row.scalar_one_or_none()
+
+    # Fallback to overall crop price if specific district has no records
+    if latest is None:
+        fb_row = await db.execute(
+            select(MandiPrice.modal_price)
+            .where(
+                MandiPrice.commodity.ilike(c_pattern),
+                MandiPrice.modal_price.isnot(None),
+            )
+            .order_by(MandiPrice.arrival_date.desc())
+            .limit(1)
+        )
+        latest = fb_row.scalar_one_or_none()
+
     if latest is None:
         return {
             "type": "error",
@@ -328,8 +360,8 @@ async def _handle_price(crop: str, district: str, db: AsyncSession) -> dict:
     arr_row = await db.execute(
         select(MandiPrice.arrivals_tonnes)
         .where(
-            MandiPrice.commodity.ilike(crop),
-            MandiPrice.district.ilike(district),
+            MandiPrice.commodity.ilike(c_pattern),
+            or_(*d_conditions),
             MandiPrice.arrivals_tonnes.isnot(None),
         )
         .order_by(MandiPrice.arrival_date.desc())
