@@ -167,11 +167,13 @@ async def conversation_message(
             result = await _handle_saturation(crop, district, db)
 
         elif parsed.intent == Intent.AGRONOMY_ADVICE:
-            advice = await get_agronomy_advice(body.text, db, crop=crop)
+            advice = await get_agronomy_advice(body.text, db, crop=crop, phone_number=body.sender_id)
             result = {"type": "advisory", "text": advice, "crop": crop}
 
         else:
-            result = {"type": "help"}
+            # World-Class Intelligent Fallback: Route any free-text query to Gemini 2.5 Flash RAG Advisory
+            advice = await get_agronomy_advice(body.text, db, crop=crop, phone_number=body.sender_id)
+            result = {"type": "advisory", "text": advice, "crop": crop}
 
     except Exception as exc:
         logger.exception("Conversation engine error for sender=%s: %s", body.sender_id, exc)

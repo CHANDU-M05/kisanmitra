@@ -83,11 +83,20 @@ _CROP_ALIASES: dict[str, str] = {
 }
 
 _DISTRICT_ALIASES: dict[str, str] = {
-    "ಚಿಕ್ಕಬಳ್ಳಾಪುರ": "chikkaballapur",
-    "chikballapur":   "chikkaballapur",
-    "chikkaballapura":"chikkaballapur",
-    "ಕೋಲಾರ":          "kolar",
-    "kolara":         "kolar",
+    "ಚಿಕ್ಕಬಳ್ಳಾಪುರ": "chikkaballapur", "chikballapur": "chikkaballapur", "chikkaballapura": "chikkaballapur",
+    "ಕೋಲಾರ": "kolar", "kolara": "kolar",
+    "ತುಮಕೂರು": "tumakuru", "tumkur": "tumakuru", "tumakuru": "tumakuru",
+    "ಶಿವಮೊಗ್ಗ": "shivamogga", "shimoga": "shivamogga", "shivamogga": "shivamogga",
+    "ಬೆಂಗಳೂರು": "bengaluru urban", "bangalore": "bengaluru urban", "bengaluru": "bengaluru urban",
+    "ಬೆಳಗಾವಿ": "belagavi", "belgaum": "belagavi", "belagavi": "belagavi",
+    "ಮೈಸೂರು": "mysuru", "mysore": "mysuru", "mysuru": "mysuru",
+    "ದಾವಣಗೆರೆ": "davanagere", "davangere": "davanagere", "davanagere": "davanagere",
+    "ಧಾರವಾಡ": "dharwad", "dharwad": "dharwad",
+    "ಬಳ್ಳಾರಿ": "ballari", "bellary": "ballari", "ballari": "ballari",
+    "ಹಾಸನ": "hassan", "hassan": "hassan",
+    "ಹಾವೇರಿ": "haveri", "haveri": "haveri",
+    "ಮಂಡ್ಯ": "mandya", "mandya": "mandya",
+    "ವಿಜಯನಗರ": "vijayanagara", "vijayanagara": "vijayanagara",
 }
 
 # Fuzzy-match corpus — all known surface forms
@@ -178,7 +187,9 @@ _AGRONOMY_KEYWORDS = [
     "disease", "ರೋಗ", "fertilizer", "ಗೊಬ್ಬರ", "pesticide", "ಕೀಟನಾಶಕ",
     "weather", "ಮಳೆ", "seed", "ಬೀಜ", "irrigation", "ನೀರಾವರಿ",
     "soil", "ಮಣ್ಣು", "advice", "ಸಲಹೆ", "help", "ಸಹಾಯ",
-    "how to", "ಹೇಗೆ", "what to", "ಏನು ಮಾಡಲಿ",
+    "how to", "ಹೇಗೆ", "what to", "ಏನು ಮಾಡಲಿ", "ಏನು ಮಾಡಬೇಕು",
+    "ಇಳುವರಿ", "ಹೆಚ್ಚಿಸಲು", "ಮಾಡಬೇಕು", "ಸಲಹೆಗಳು", "ನೀರು", "ಔಷಧಿ", "ನಿಯಂತ್ರಣ", "ಕಟಾವು", "ಬೆಳೆ",
+    "yield", "care", "grow", "manage", "tips", "pest", "water", "spacing", "harvest"
 ]
 
 
@@ -225,6 +236,15 @@ def parse(text: str) -> ParsedMessage:
     if any(kw in tl for kw in _SATURATION_KEYWORDS):
         return ParsedMessage(
             intent   = Intent.SATURATION_CHECK,
+            crop     = crop,
+            district = district,
+            area     = None,
+            raw_text = text,
+        )
+
+    if any(kw in tl for kw in _AGRONOMY_KEYWORDS) or len(tl.split()) > 2:
+        return ParsedMessage(
+            intent   = Intent.AGRONOMY_ADVICE,
             crop     = crop,
             district = district,
             area     = None,
