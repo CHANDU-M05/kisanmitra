@@ -447,17 +447,22 @@ async def embed_text(text: str) -> list[float] | None:
         return None
 
 
+_ADVISORY_CACHE: dict[str, str] = {}
+
 async def get_agronomy_advice(query: str, db: AsyncSession, crop: str | None = None, phone_number: str | None = None) -> str:
     """
     Upgraded RAG pipeline for handling agronomy queries with multi-turn session memory context.
     1. Detects query language (English/Kannada).
     2. Embeds the user query and searches PostgreSQL using pgvector.
     3. Retrieves recent conversation history if phone_number is provided.
-    4. Prompts Gemini 1.5 Pro with context and dialogue history.
+    4. Prompts Gemini 2.5 Flash with context and dialogue history.
     """
-    is_kn = is_kannada(query)
+    cache_key = f"{crop or 'General'}:{query.strip().lower()}"
+    if cache_key in _ADVISORY_CACHE:
+        logger.info("RAG: Returning cached advisory for key=%s", cache_key)
+        return _ADVISORY_CACHE[cache_key]
 
-    if _embeddings is None or _llm is None:
+    if _llm is None:
         fallback_msg, suffix = get_offline_fallback(query, crop)
         return f"{fallback_msg}\n\n— KisanMitra {suffix}"
 
@@ -510,14 +515,34 @@ async def get_agronomy_advice(query: str, db: AsyncSession, crop: str | None = N
         ])
         
         chain = prompt | _llm | StrOutputParser()
-        answer = await chain.ainvoke({
-            "context": context,
-            "history": history_str,
-            "query": query, 
-            "crop": crop or "General"
-        })
         
-        return f"{answer}\n\n— KisanMitra 🌾"
+        # Retry logic for 429 rate limits on Free Tier
+        answer = None
+        for attempt in range(2):
+            try:
+                answer = await chain.ainvoke({
+                    "context": context,
+                    "history": history_str,
+                    "query": query, 
+                    "crop": crop or "General"
+                })
+                break
+            except Exception as call_err:
+                if "RESOURCE_EXHAUSTED" in str(call_err) or "429" in str(call_err):
+                    logger.warning("Gemini 429 Rate Limit hit (attempt %d). Waiting 1.5s...", attempt + 1)
+                    import asyncio
+                    await asyncio.sleep(1.5)
+                else:
+                    raise call_err
+
+        if not answer:
+            fallback_msg, suffix = get_offline_fallback(query, crop)
+            return f"{fallback_msg}\n\n— KisanMitra {suffix}"
+
+        clean_ans = answer.replace("— KisanMitra 🌾", "").replace("— ಕಿಸಾನ್‌ಮಿತ್ರ 🌾", "").strip()
+        final_res = f"{clean_ans}\n\n— KisanMitra 🌾"
+        _ADVISORY_CACHE[cache_key] = final_res
+        return final_res
 
     except Exception as exc:
         logger.error(f"RAG Error: {exc}")

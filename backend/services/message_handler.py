@@ -109,23 +109,31 @@ _FUZZY_THRESHOLD = 75   # minimum score (0-100) to accept a fuzzy match
 def resolve_crop(text: str) -> Optional[str]:
     """
     GUARDRAIL 1: Return canonical crop ID or None.
-    Priority: alias dict → fuzzy match → None.
+    Matches exact crop tokens or alias keys against word boundaries in text.
     """
     tl = text.lower().strip()
+    clean_text = re.sub(r"[^\w\s]", " ", tl)
+    words = clean_text.split()
 
-    # 1. Direct alias lookup
+    # 1. Exact canonical name match
+    for w in words:
+        if w in CANONICAL_CROPS:
+            return CANONICAL_CROPS[w]
+
+    # 2. Direct alias lookup (word match or explicit multi-word alias match)
     for alias, key in _CROP_ALIASES.items():
-        if alias in tl:
+        if alias in words or (len(alias.split()) > 1 and alias in tl):
             return CANONICAL_CROPS[key]
 
-    # 2. Fuzzy fallback on individual tokens
-    for token in tl.split():
-        match, score = fuzz_process.extractOne(token, _CROP_CORPUS) or (None, 0)
-        if score >= _FUZZY_THRESHOLD and match:
-            key = _CROP_ALIASES.get(match, match)
-            if key in CANONICAL_CROPS:
-                logger.debug("[FUZZY CROP] '%s' → '%s' (score=%d)", token, key, score)
-                return CANONICAL_CROPS[key]
+    # 3. High-confidence fuzzy match (threshold 88) on individual words (>= 4 chars)
+    for token in words:
+        if len(token) >= 4:
+            match, score = fuzz_process.extractOne(token, _CROP_CORPUS) or (None, 0)
+            if score >= 88 and match:
+                key = _CROP_ALIASES.get(match, match)
+                if key in CANONICAL_CROPS:
+                    logger.debug("[FUZZY CROP] '%s' → '%s' (score=%d)", token, key, score)
+                    return CANONICAL_CROPS[key]
 
     return None
 
@@ -133,21 +141,30 @@ def resolve_crop(text: str) -> Optional[str]:
 def resolve_district(text: str) -> Optional[str]:
     """
     GUARDRAIL 1: Return canonical district ID or None.
-    Defaults to Chikkaballapur if no district is found in text.
+    Matches exact district tokens or alias keys against word boundaries in text.
     """
     tl = text.lower().strip()
+    clean_text = re.sub(r"[^\w\s]", " ", tl)
+    words = clean_text.split()
 
+    # 1. Direct alias lookup or canonical name match
     for alias, key in _DISTRICT_ALIASES.items():
-        if alias in tl:
+        if alias in words or alias in tl:
             return CANONICAL_DISTRICTS[key]
 
-    for token in tl.split():
-        match, score = fuzz_process.extractOne(token, _DISTRICT_CORPUS) or (None, 0)
-        if score >= _FUZZY_THRESHOLD and match:
-            key = _DISTRICT_ALIASES.get(match, match)
-            if key in CANONICAL_DISTRICTS:
-                logger.debug("[FUZZY DISTRICT] '%s' → '%s' (score=%d)", token, key, score)
-                return CANONICAL_DISTRICTS[key]
+    for w in words:
+        if w in CANONICAL_DISTRICTS:
+            return CANONICAL_DISTRICTS[w]
+
+    # 2. High-confidence fuzzy match (threshold 88) on individual words (>= 5 chars)
+    for token in words:
+        if len(token) >= 5:
+            match, score = fuzz_process.extractOne(token, _DISTRICT_CORPUS) or (None, 0)
+            if score >= 88 and match:
+                key = _DISTRICT_ALIASES.get(match, match)
+                if key in CANONICAL_DISTRICTS:
+                    logger.debug("[FUZZY DISTRICT] '%s' → '%s' (score=%d)", token, key, score)
+                    return CANONICAL_DISTRICTS[key]
 
     return None
 
