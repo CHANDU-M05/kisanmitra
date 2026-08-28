@@ -164,28 +164,28 @@ class Intent(Enum):
 
 # Keywords that MUST bypass the LLM (G2)
 _PRICE_KEYWORDS = [
-    "ಬೆಲೆ", "ಬೆಲ", "price", "rate", "mandi", "ಮಂಡಿ", "ಧರ",
-]
-_DECLARE_KEYWORDS = [
-    "ಎಕರೆ", "acres", "acre", "declare", "ಬೆಳೆ ಹಾಕಿದ್ದೇನೆ",
-    "ನಾನು ಬೆಳೆ", "crop sown",
+    "ಬೆಲೆ", "ಬೆಲ", "price", "rate", "mandi", "ಮಂಡಿ", "ಧರ", "ಧಾರಣೆ",
 ]
 _SATURATION_KEYWORDS = [
     "saturation", "ಸ್ಯಾಚುರೇಷನ್", "risk", "ಅಪಾಯ",
-    "how many farmers", "ಎಷ್ಟು ರೈತರು",
+    "how many farmers", "ಎಷ್ಟು ರೈತರು", "registered acreage", "total acreage", "risk level",
+]
+_DECLARE_KEYWORDS = [
+    "ಎಕರೆ", "acres", "acre", "declare", "ಬೆಳೆ ಹಾಕಿದ್ದೇನೆ",
+    "ನಾನು ಬೆಳೆ", "crop sown", "planted", "sown", "growing",
 ]
 # Only agronomy questions go to the LLM
 _AGRONOMY_KEYWORDS = [
     # English terms
-    "disease", "rot", "blight", "wilt", "borer", "virus", "pest",
-    "fertilizer", "fertilizers", "dose", "dosage", "npk", "urea", "dap", "mop",
+    "disease", "rot", "blight", "wilt", "borer", "virus", "pest", "thrips",
+    "fertilizer", "fertilizers", "dose", "dosage", "npk", "urea", "dap", "mop", "ratio", "basal", "fym",
     "boron", "metalaxyl", "mancozeb", "copper", "oxychloride", "pesticide", "fungicide",
     "insecticide", "weather", "rain", "monsoon", "seed", "irrigation", "water", "watering",
     "soil", "loam", "nitrogen", "phosphorus", "potassium", "gypsum", "advice", "help",
     "treatment", "prevention", "control", "drenching", "application", "spray", "spraying",
     "yellow", "leaves", "leaf", "rotate", "rotation", "harvest", "harvesting", "spacing",
     "care", "grow", "manage", "tips", "yield", "how to", "what to", "what if", "which",
-    "should i", "can i", "how much", "how many", "exact dosage",
+    "should i", "can i", "how much", "exact dosage", "recommended", "intercrop",
     # Kannada script terms
     "ರೋಗ", "ಕೊಳೆ", "ಕರಕು", "ಕುತ್ತಿಗೆ", "ಗೊಬ್ಬರ", "ಕೀಟನಾಶಕ", "ಔಷಧಿ", "ಮಳೆ", "ಬೀಜ",
     "ನೀರಾವರಿ", "ಮಣ್ಣು", "ಸಲಹೆ", "ಸಹಾಯ", "ಹೇಗೆ", "ಏನು ಮಾಡಲಿ", "ಏನು ಮಾಡಬೇಕು", "ಇಳುವರಿ",
@@ -193,7 +193,7 @@ _AGRONOMY_KEYWORDS = [
     "ಸೈನಿಕ ಹುಳು", "ಎಲೆ", "ಹಳದಿ", "ಸಿಂಪಡಿಸಬೇಕು", "ಪ್ರಮಾಣ",
     # Kanglish (Romanized Kannada) terms
     "roga", "hula", "aushadhi", "gobbara", "madabeku", "spray madabeku", "thundu",
-    "gantu", "neeru", "beleli", "salaha", "ide", "yav", "estu"
+    "gantu", "neeru", "beleli", "salaha", "ide", "yav", "estu", "sagida"
 ]
 
 
@@ -229,27 +229,7 @@ def parse(text: str) -> ParsedMessage:
             raw_text = text,
         )
 
-    # 1. Sowing declaration check (crop + declare keywords)
-    if crop and any(kw in tl for kw in _DECLARE_KEYWORDS):
-        return ParsedMessage(
-            intent   = Intent.DECLARE_CROP,
-            crop     = crop,
-            district = district,
-            area     = extract_area(text),
-            raw_text = text,
-        )
-
-    # 2. Price query check
-    if any(kw in tl for kw in _PRICE_KEYWORDS):
-        return ParsedMessage(
-            intent   = Intent.PRICE_QUERY,
-            crop     = crop,
-            district = district,
-            area     = None,
-            raw_text = text,
-        )
-
-    # 3. Saturation risk check
+    # 1. Saturation risk check MUST take top priority over declarations & agronomy
     if any(kw in tl for kw in _SATURATION_KEYWORDS):
         return ParsedMessage(
             intent   = Intent.SATURATION_CHECK,
@@ -259,7 +239,7 @@ def parse(text: str) -> ParsedMessage:
             raw_text = text,
         )
 
-    # 4. Explicit Agronomy question check
+    # 2. Agronomy advice check MUST precede sowing declarations (so dosage/treatment queries with acre numbers route to advisory)
     if any(kw in tl for kw in _AGRONOMY_KEYWORDS):
         return ParsedMessage(
             intent   = Intent.AGRONOMY_ADVICE,
@@ -269,7 +249,27 @@ def parse(text: str) -> ParsedMessage:
             raw_text = text,
         )
 
-    # 5. Implicit declaration if crop and explicit acreage number mentioned
+    # 3. Price query check
+    if any(kw in tl for kw in _PRICE_KEYWORDS):
+        return ParsedMessage(
+            intent   = Intent.PRICE_QUERY,
+            crop     = crop,
+            district = district,
+            area     = None,
+            raw_text = text,
+        )
+
+    # 4. Sowing declaration check (crop + declare keywords)
+    if crop and any(kw in tl for kw in _DECLARE_KEYWORDS):
+        return ParsedMessage(
+            intent   = Intent.DECLARE_CROP,
+            crop     = crop,
+            district = district,
+            area     = extract_area(text),
+            raw_text = text,
+        )
+
+    # 5. Implicit declaration if crop and explicit acreage number mentioned without agronomy/saturation terms
     if crop and re.search(r"\b[\d.]+\s*(acre|acres|ಎಕರೆ)", text, re.IGNORECASE):
         return ParsedMessage(
             intent   = Intent.DECLARE_CROP,
