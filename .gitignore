@@ -6,6 +6,7 @@ __pycache__/
 *.pyd
 .Python
 .pytest_cache/
+catboost_info/
 .coverage
 htmlcov/
 
