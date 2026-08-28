@@ -123,6 +123,7 @@ async def conversation_message(
         body_district=body.district,
         parsed_district=parsed.district,
         db=db,
+        raw_text=body.text or synthetic_text,
     )
     area = body.area or parsed.area or 1.0
     is_fallback_default = crop_used_def or dist_used_def
@@ -219,13 +220,14 @@ async def _resolve_conversation_context(
     body_district: Optional[str],
     parsed_district: Optional[str],
     db: AsyncSession,
+    raw_text: str = "",
 ) -> tuple[str, str, bool, bool, bool, bool]:
     """
     Multi-turn Context Recovery (Scoped by sender_id + channel, 24h TTL):
-    1. If crop is explicitly provided in request or parsed from text, use it.
+    1. If crop is explicitly provided in current turn (request or parsed), USE IT directly.
        Otherwise, query ChatHistory for the last non-null crop for (sender_id, channel) within 24h.
        Fallback: "Tomato" (crop_used_default=True).
-    2. If district is explicitly provided in request or parsed from text, use it.
+    2. If district is explicitly provided in current turn (request or parsed), USE IT directly.
        Otherwise, query ChatHistory for the last non-null district for (sender_id, channel) within 24h.
        Fallback: "Chikkaballapur" (dist_used_default=True).
 

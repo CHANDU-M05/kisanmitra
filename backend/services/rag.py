@@ -154,13 +154,14 @@ def get_offline_fallback(query: str, crop: str | None) -> tuple[str, str]:
                 "• **Cautions**: Remove infected plants immediately and avoid water stagnation near plant stems."
             ), suffix
 
-        # 0b. Root-Knot Nematodes & Gantu Hula
-        if any(kw in q for kw in ["gantu", "nematode", "nematodes", "gantu hula", "root-knot"]):
+        # 0b. Brinjal Dual-Pest: Root-Knot Nematodes & Fruit Borer
+        if (c == "brinjal" or "brinjal" in q) and ("borer" in q or "fruit borer" in q or "gantu" in q or "nematode" in q):
             return (
-                "📋 **Root-Knot Nematodes & Gantu Hula Management**:\n"
-                "• **Overview**: *Meloidogyne* nematodes form galls on roots, restricting water and nutrient uptake.\n"
-                "• **Actionable Steps**: Apply bio-nematicide *Purpureocillium lilacinum* (2kg/acre) or Fluopyram (1ml/L) via drip irrigation.\n"
-                "• **Cautions**: Intercrop Marigold as a trap crop — root exudates naturally kill nematode larvae."
+                "📋 **Brinjal Dual-Pest Control: Nematodes & Fruit Borer**:\n"
+                "• **Overview**: Managing BOTH Root-Knot Nematodes (*Meloidogyne*) and Fruit & Shoot Borer (*Leucinodes orbonalis*) requires a combined soil drench + foliar protocol.\n"
+                "• **Soil Drenching (Nematodes)**: Drench root zone with *Purpureocillium lilacinum* (2kg/acre) or Fluopyram (1ml/L water) at 150ml solution per plant.\n"
+                "• **Foliar Spray (Fruit Borer)**: Spray Emamectin Benzoate 5% SG (0.4g/L) or Chlorantraniliprole 18.5% SC (0.3ml/L) at 15-day intervals during flowering.\n"
+                "• **Integrated Protocol**: Drench soil first, then apply foliar spray 48 hours later. Intercrop Marigold as a natural trap crop."
             ), suffix
 
         # 0c. Crop Rotation & Nitrogen Restoration
@@ -192,13 +193,13 @@ def get_offline_fallback(query: str, crop: str | None) -> tuple[str, str]:
                 "• **Cautions**: Apply Boron (1kg/acre) and Calcium Nitrate (5kg/acre) at day 35 to prevent hollow stem disorder."
             ), suffix
 
-        # 1. Onion Thrips, Downy Mildew & Nematodes
-        if any(kw in q for kw in ["downy mildew", "trichoderma", "purple blotch", "neck rot"]):
+        # 1. Onion Triple Threat: Purple Blotch, Downy Mildew & Thrips
+        if c == "onion" or any(kw in q for kw in ["onion", "purple blotch", "downy mildew", "thrips", "ನೇರಳೆ"]):
             return (
-                "📋 **Onion Thrips, Downy Mildew & Neck Rot Control**:\n"
-                "• **Overview**: Thrips cause silvery patches while downy mildew and neck rot degrade bulb quality.\n"
-                "• **Actionable Steps**: Spray Fipronil (2ml/L) or Spinetoram (0.9ml/L) for thrips. Spray Saaf (2g/L) for rot.\n"
-                "• **Cautions**: Spray Metalaxyl + Mancozeb (2.5g/L) for downy mildew with a spreader sticker (0.5ml/L)."
+                "📋 **Onion Integrated Disease & Thrips Control**:\n"
+                "• **Thrips & Purple Blotch**: Spray Fipronil 5% SC (2ml/L) + Saaf (Mancozeb + Carbendazim @ 2g/L) with 0.5ml/L spreader sticker.\n"
+                "• **Downy Mildew**: Spray Metalaxyl 8% + Mancozeb 64% WP (2.5g/L) at 10-day intervals during high humidity.\n"
+                "• **Neck Rot**: Apply Copper Oxychloride (3g/L) 15 days prior to harvest to prevent post-harvest bulb storage rot."
             ), suffix
 
         # 2. Potato Potash & Tuber Bulking
@@ -210,13 +211,14 @@ def get_offline_fallback(query: str, crop: str | None) -> tuple[str, str]:
                 "• **Cautions**: Apply 30kg/acre MOP in soil during earthing-up. Avoid excess nitrogen after day 45."
             ), suffix
 
-        # 3. Capsicum / Tomato Bacterial Wilt & Drenching
+        # 3. Capsicum / Tomato Bacterial Wilt & Drenching Volume
         if any(kw in q for kw in ["wilt", "bactericide", "copper oxychloride", "sudu", "sagida", "drenching", "drench"]):
             return (
-                "📋 **Bacterial Wilt & Soil Drenching Management**:\n"
-                "• **Overview**: Bacterial wilt (*Ralstonia solanacearum*) causes sudden drooping of green foliage.\n"
-                "• **Actionable Steps**: Drench root zone with Copper Oxychloride (3g/L) + Streptocycline (0.5g/10L water).\n"
-                "• **Cautions**: Apply 19:19:19 water-soluble fertilizer via drip. Remove severely infected plants immediately."
+                "📋 **Bacterial Wilt & Soil Drenching Management (Greenhouse/Field)**:\n"
+                "• **Overview**: Bacterial wilt (*Ralstonia solanacearum*) causes sudden vascular wilting of green plants.\n"
+                "• **Drenching Solution**: Mix Copper Oxychloride 50 WP (3g/L) + Streptocycline (0.5g/10L water).\n"
+                "• **Exact Drenching Volume**: Apply **150–200 ml of prepared solution directly at the root zone per plant** using a nozzle-removed knapsack sprayer.\n"
+                "• **Fertigation**: Drip fertigate 19:19:19 (3kg/acre) 3 days after drenching to stimulate fresh root growth."
             ), suffix
 
         # 4. Leaf Curling & Micro-nutrient Deficiency

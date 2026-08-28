@@ -197,9 +197,12 @@ _PRICE_KEYWORDS = [
 _SATURATION_KEYWORDS = [
     "saturation", "ಸ್ಯಾಚುರೇಷನ್", "risk", "ಅಪಾಯ", "ಎಷ್ಟು ಎಕರೆ", "ಎಷ್ಟು ರೈತರು", "ಇಗಾಗಲೇ ಬಿತ್ತನೆ", "ಇಾಗಲೇ ಬಿತ್ತನೆ",
     "how many farmers", "how many acres", "already planted", "already sown", "registered acreage", "total acreage", "risk level",
+    "across all farmers", "registered in", "how many total acres", "this season"
 ]
 _DECLARE_KEYWORDS = [
-    "declare", "ಬೆಳೆ ಹಾಕಿದ್ದೇನೆ", "ನಾನು ಬೆಳೆ", "crop sown", "planted", "sown", "hakidini", "ಹಾಕಿದಿನಿ", "ಹಾಕಿದ್ದೇನೆ", "register my crop", "record madi", "ನೋಂದಣಿ"
+    "declare", "ಬೆಳೆ ಹಾಕಿದ್ದೇನೆ", "ನಾನು ಬೆಳೆ", "crop sown", "planted", "sown", "hakidini", "ಹಾಕಿದಿನಿ", "ಹಾಕಿದ್ದೇನೆ",
+    "register my crop", "record madi", "ನೋಂದಣಿ", "record this", "register this", "record entry", "record in database",
+    "database", "register", "record", "save"
 ]
 # Only agronomy questions go to the LLM
 _AGRONOMY_KEYWORDS = [
@@ -243,14 +246,17 @@ def parse(text: str) -> ParsedMessage:
     district = resolve_district(text)
     area     = extract_area(text)
 
-    # 1. Pure Smalltalk / Greetings / Capability inquiries -> UNKNOWN -> Help Menu
-    _SMALLTALK_TERMS = [
-        "namaskara", "hegideera", "cricket", "weather", "bombat", "hello", "hi", "hey",
-        "good morning", "good evening", "thanks", "thank you", "what can you do", "helping farmers",
-        "how is kisanmitra", "about kisanmitra", "who are you", "how are you"
+    # 1. Non-agronomic / General / Travel / Geography / Smalltalk -> UNKNOWN -> Help Menu
+    _NON_AGRI_TERMS = [
+        "umbrella", "geography", "history", "travel", "coffee", "restaurant", "hotel", "cricket",
+        "namaskara", "hegideera", "bombat", "hello", "hi", "hey", "good morning", "good evening",
+        "thanks", "thank you", "what can you do", "helping farmers", "how is kisanmitra", "about kisanmitra", "who are you"
     ]
-    is_smalltalk = any(term in tl for term in _SMALLTALK_TERMS) and not any(kw in tl for kw in ["disease", "rot", "spray", "gobbara", "fertilizer", "acre", "sowed", "planted", "hakidini"])
-    if is_smalltalk or (not crop and not district and not any(kw in tl for kw in _PRICE_KEYWORDS + _SATURATION_KEYWORDS + _AGRONOMY_KEYWORDS)):
+    has_non_agri = any(term in tl for term in _NON_AGRI_TERMS)
+    has_agri_kw = any(kw in tl for kw in _PRICE_KEYWORDS + _SATURATION_KEYWORDS + _DECLARE_KEYWORDS + _AGRONOMY_KEYWORDS)
+    
+    # Critical Rule: If there is NO crop AND NO explicit agricultural keyword, ALWAYS return UNKNOWN!
+    if has_non_agri or not (crop or has_agri_kw):
         return ParsedMessage(
             intent   = Intent.UNKNOWN,
             crop     = crop,
