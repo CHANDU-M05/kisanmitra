@@ -201,12 +201,24 @@ _SATURATION_KEYWORDS = [
 ]
 # Only agronomy questions go to the LLM
 _AGRONOMY_KEYWORDS = [
-    "disease", "ರೋಗ", "fertilizer", "ಗೊಬ್ಬರ", "pesticide", "ಕೀಟನಾಶಕ",
-    "weather", "ಮಳೆ", "seed", "ಬೀಜ", "irrigation", "ನೀರಾವರಿ",
-    "soil", "ಮಣ್ಣು", "advice", "ಸಲಹೆ", "help", "ಸಹಾಯ",
-    "how to", "ಹೇಗೆ", "what to", "ಏನು ಮಾಡಲಿ", "ಏನು ಮಾಡಬೇಕು",
-    "ಇಳುವರಿ", "ಹೆಚ್ಚಿಸಲು", "ಮಾಡಬೇಕು", "ಸಲಹೆಗಳು", "ನೀರು", "ಔಷಧಿ", "ನಿಯಂತ್ರಣ", "ಕಟಾವು", "ಬೆಳೆ",
-    "yield", "care", "grow", "manage", "tips", "pest", "water", "spacing", "harvest"
+    # English terms
+    "disease", "rot", "blight", "wilt", "borer", "virus", "pest",
+    "fertilizer", "fertilizers", "dose", "dosage", "npk", "urea", "dap", "mop",
+    "boron", "metalaxyl", "mancozeb", "copper", "oxychloride", "pesticide", "fungicide",
+    "insecticide", "weather", "rain", "monsoon", "seed", "irrigation", "water", "watering",
+    "soil", "loam", "nitrogen", "phosphorus", "potassium", "gypsum", "advice", "help",
+    "treatment", "prevention", "control", "drenching", "application", "spray", "spraying",
+    "yellow", "leaves", "leaf", "rotate", "rotation", "harvest", "harvesting", "spacing",
+    "care", "grow", "manage", "tips", "yield", "how to", "what to", "what if", "which",
+    "should i", "can i", "how much", "how many", "exact dosage",
+    # Kannada script terms
+    "ರೋಗ", "ಕೊಳೆ", "ಕರಕು", "ಕುತ್ತಿಗೆ", "ಗೊಬ್ಬರ", "ಕೀಟನಾಶಕ", "ಔಷಧಿ", "ಮಳೆ", "ಬೀಜ",
+    "ನೀರಾವರಿ", "ಮಣ್ಣು", "ಸಲಹೆ", "ಸಹಾಯ", "ಹೇಗೆ", "ಏನು ಮಾಡಲಿ", "ಏನು ಮಾಡಬೇಕು", "ಇಳುವರಿ",
+    "ಹೆಚ್ಚಿಸಲು", "ಮಾಡಬೇಕು", "ಸಲಹೆಗಳು", "ನೀರು", "ನಿಯಂತ್ರಣ", "ಕಟಾವು", "ಬೆಳೆ", "ಹುಳು",
+    "ಸೈನಿಕ ಹುಳು", "ಎಲೆ", "ಹಳದಿ", "ಸಿಂಪಡಿಸಬೇಕು", "ಪ್ರಮಾಣ",
+    # Kanglish (Romanized Kannada) terms
+    "roga", "hula", "aushadhi", "gobbara", "madabeku", "spray madabeku", "thundu",
+    "gantu", "neeru", "beleli", "salaha", "ide", "yav", "estu"
 ]
 
 

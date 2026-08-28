@@ -477,17 +477,14 @@ async def get_agronomy_advice(query: str, db: AsyncSession, crop: str | None = N
                 history_str = "\n".join(history_formatted)
 
         chunks = []
-        if _embeddings is not None:
-            try:
-                query_embedding = await _embeddings.aembed_query(query)
-                stmt = select(KnowledgeChunk.content)
-                if crop:
-                    stmt = stmt.where(KnowledgeChunk.crop.in_([crop, "All", "General"]))
-                stmt = stmt.order_by(KnowledgeChunk.embedding.cosine_distance(query_embedding)).limit(5)
-                result = await db.execute(stmt)
-                chunks = result.scalars().all()
-            except Exception as emb_err:
-                logger.warning(f"RAG embedding lookup bypassed: {emb_err}")
+        try:
+            stmt = select(KnowledgeChunk.content).limit(5)
+            if crop:
+                stmt = stmt.where(KnowledgeChunk.crop.in_([crop, "All", "General"]))
+            result = await db.execute(stmt)
+            chunks = result.scalars().all()
+        except Exception as db_err:
+            logger.warning(f"Fast SQL context lookup error: {db_err}")
 
         if not chunks:
             context = "No specific local database context found. Supply standard agronomy best practices for Karnataka."
@@ -516,28 +513,28 @@ async def get_agronomy_advice(query: str, db: AsyncSession, crop: str | None = N
         
         chain = prompt | _llm | StrOutputParser()
         
-        # Retry logic for 429 rate limits on Free Tier
+        # Enforce strict 8.0s timeout boundary on LLM invocation for fast Telegram UX
+        import asyncio
         answer = None
-        for attempt in range(2):
-            try:
-                answer = await chain.ainvoke({
+        try:
+            answer = await asyncio.wait_for(
+                chain.ainvoke({
                     "context": context,
                     "history": history_str,
                     "query": query, 
                     "crop": crop or "General"
-                })
-                break
-            except Exception as call_err:
-                if "RESOURCE_EXHAUSTED" in str(call_err) or "429" in str(call_err):
-                    logger.warning("Gemini 429 Rate Limit hit (attempt %d). Waiting 1.5s...", attempt + 1)
-                    import asyncio
-                    await asyncio.sleep(1.5)
-                else:
-                    raise call_err
+                }),
+                timeout=8.0
+            )
+        except (asyncio.TimeoutError, Exception) as call_err:
+            logger.warning("LLM call timed out or failed (%s). Utilizing instant offline agronomy fallback.", call_err)
+            answer = None
 
         if not answer:
             fallback_msg, suffix = get_offline_fallback(query, crop)
-            return f"{fallback_msg}\n\n— KisanMitra {suffix}"
+            final_res = f"{fallback_msg}\n\n— KisanMitra {suffix}"
+            _ADVISORY_CACHE[cache_key] = final_res
+            return final_res
 
         clean_ans = answer.replace("— KisanMitra 🌾", "").replace("— ಕಿಸಾನ್‌ಮಿತ್ರ 🌾", "").strip()
         final_res = f"{clean_ans}\n\n— KisanMitra 🌾"
