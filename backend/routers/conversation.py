@@ -113,7 +113,7 @@ async def conversation_message(
     # Multi-turn Context Recovery:
     # 1. Scope context to (sender_id, channel) with a 24-hour TTL recency window.
     # 2. If crop or district is omitted in current turn, recover context from previous turns.
-    has_explicit_current_entity = bool(body.crop or parsed.crop or body.district or parsed.district)
+    has_explicit_current_crop = bool(body.crop or parsed.crop)
 
     crop, district, crop_from_ctx, dist_from_ctx, crop_used_def, dist_used_def = await _resolve_conversation_context(
         sender_id=body.sender_id,
@@ -128,10 +128,10 @@ async def conversation_message(
     area = body.area or parsed.area
     is_fallback_default = crop_used_def or dist_used_def
 
-    # CRITICAL GUARD: Intent carryover ONLY triggers if the user explicitly provided an entity
-    # in the CURRENT turn (e.g., "what about Belagavi?") but omitted the intent keyword.
-    # Greetings/chitchat ("hello", "thanks") specify NO entity -> intent remains UNKNOWN -> returns help.
-    if parsed.intent == Intent.UNKNOWN and has_explicit_current_entity:
+    # CRITICAL GUARD: Intent carryover ONLY triggers if the user explicitly provided a CROP entity
+    # in the CURRENT turn but omitted the intent keyword.
+    # Location names alone or greetings specify NO crop -> intent remains UNKNOWN -> returns help menu.
+    if parsed.intent == Intent.UNKNOWN and has_explicit_current_crop:
         prev_intent = await _get_previous_intent(body.sender_id, body.channel, db)
         if prev_intent:
             parsed = mh.ParsedMessage(

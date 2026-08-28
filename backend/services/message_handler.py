@@ -225,7 +225,7 @@ _PRICE_KEYWORDS = [
 _SATURATION_KEYWORDS = [
     "saturation", "ಸ್ಯಾಚುರೇಷನ್", "risk", "ಅಪಾಯ", "ಎಷ್ಟು ಎಕರೆ", "ಎಷ್ಟು ರೈತರು", "ಇಗಾಗಲೇ ಬಿತ್ತನೆ", "ಇಾಗಲೇ ಬಿತ್ತನೆ",
     "how many farmers", "how many acres", "already planted", "already sown", "registered acreage", "total acreage", "risk level",
-    "across all farmers", "registered in", "how many total acres", "this season"
+    "across all farmers", "registered in", "how many total acres", "this season", "how many total farmers", "farmers planted", "total farmers"
 ]
 _DECLARE_KEYWORDS = [
     "declare", "sowed", "sown", "planted", "hakidini", "ಹಾಕಿದಿನಿ", "ಹಾಕಿದ್ದೇನೆ",
@@ -274,9 +274,10 @@ def parse(text: str) -> ParsedMessage:
     district = resolve_district(text)
     area     = extract_area(text)
 
-    # 1. Non-agronomic / General / Travel / Geography / Weather / Smalltalk -> UNKNOWN -> Help Menu
+    # 1. Non-agronomic / General / Travel / Geography / Weather / Tourism / Smalltalk -> UNKNOWN -> Help Menu
     _NON_AGRI_TERMS = [
         "umbrella", "geography", "history", "travel", "coffee", "restaurant", "hotel", "cricket", "rain", "weather",
+        "tourist", "tourist places", "sightseeing", "visit", "places to visit", "places",
         "namaskara", "hegideera", "bombat", "hello", "hi", "hey", "good morning", "good evening",
         "thanks", "thank you", "what can you do", "helping farmers", "how is kisanmitra", "about kisanmitra", "who are you"
     ]
