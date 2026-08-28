@@ -43,7 +43,7 @@ CANONICAL_CROPS: dict[str, str] = {
 }
 
 CANONICAL_DISTRICTS: dict[str, str] = {
-    "bagalkot": "Bagalkot", "ballari": "Ballari", "belagavi": "Belagavi",
+    "bagalkote": "Bagalkote", "ballari": "Ballari", "belagavi": "Belagavi",
     "bengaluru rural": "Bengaluru Rural", "bengaluru urban": "Bengaluru Urban",
     "bidar": "Bidar", "chamarajanagar": "Chamarajanagar", 
     "chikkaballapur": "Chikkaballapur", "chikkamagaluru": "Chikkamagaluru",
@@ -57,7 +57,7 @@ CANONICAL_DISTRICTS: dict[str, str] = {
     "vijayapura": "Vijayapura", "yadgir": "Yadgir", "vijayanagara": "Vijayanagara"
 }
 
-# ── GUARDRAIL 1: Alias tables (canonical Kannada variants) ─
+# ── GUARDRAIL 1: Alias tables (canonical Kannada variants & alternate spellings) ─
 # Every known spelling variant maps to the canonical English key.
 _CROP_ALIASES: dict[str, str] = {
     # Tomato
@@ -88,36 +88,73 @@ _CROP_ALIASES: dict[str, str] = {
 }
 
 _DISTRICT_ALIASES: dict[str, str] = {
-    # Chikkaballapur
-    "ಚಿಕ್ಕಬಳ್ಳಾಪುರ": "chikkaballapur", "ಚಿಕ್ಕಬಳ್ಳಾಪುರದಲ್ಲಿ": "chikkaballapur", "ಚಿಕ್ಕಬಳ್ಳಾಪುರನಲ್ಲಿ": "chikkaballapur",
-    "chikballapur": "chikkaballapur", "chikkaballapura": "chikkaballapur", "chikkaballapuralli": "chikkaballapur",
-    # Kolar
-    "ಕೋಲಾರ": "kolar", "ಕೋಲಾರದಲ್ಲಿ": "kolar", "ಕೋಲಾರನಲ್ಲಿ": "kolar", "kolara": "kolar", "kolaralli": "kolar",
-    # Tumakuru
-    "ತುಮಕೂರು": "tumakuru", "ತುಮಕೂರಿನಲ್ಲಿ": "tumakuru", "ತುಮಕೂರುನಲ್ಲಿ": "tumakuru", "ತುಮಕೂರಿನಲ್ಲಿ": "tumakuru",
-    "tumkur": "tumakuru", "tumakuru": "tumakuru", "tumkuralli": "tumakuru", "tumakuralli": "tumakuru",
-    # Shivamogga
-    "ಶಿವಮೊಗ್ಗ": "shivamogga", "ಶಿವಮೊಗ್ಗದಲ್ಲಿ": "shivamogga", "ಶಿವಮೊಗ್ಗನಲ್ಲಿ": "shivamogga",
-    "shimoga": "shivamogga", "shivamogga": "shivamogga", "shivamoggalli": "shivamogga", "shimogalli": "shivamogga",
-    # Mysuru
-    "ಮೈಸೂರು": "mysuru", "ಮೈಸೂರಿನಲ್ಲಿ": "mysuru", "ಮೈಸೂರುನಲ್ಲಿ": "mysuru",
-    "mysore": "mysuru", "mysuru": "mysuru", "mysuralli": "mysuru", "mysorealli": "mysuru",
-    # Davanagere
-    "ದಾವಣಗೆರೆ": "davanagere", "ದಾವಣಗೆರೆಯಲ್ಲಿ": "davanagere", "ದಾವಣಗೆರೆನಲ್ಲಿ": "davanagere",
-    "davangere": "davanagere", "davanagere": "davanagere", "davanagerealli": "davanagere",
-    # Belagavi
-    "ಬೆಳಗಾವಿ": "belagavi", "ಬೆಳಗಾವಿಯಲ್ಲಿ": "belagavi", "ಬೆಳಗಾವಿನಲ್ಲ": "belagavi",
-    "belgaum": "belagavi", "belagavi": "belagavi", "belagavialli": "belagavi",
-    # Dharwad
-    "ಧಾರವಾಡ": "dharwad", "ಧಾರವಾಡದಲ್ಲಿ": "dharwad", "ಧಾರವಾಡನಲ್ಲಿ": "dharwad", "dharwadalli": "dharwad",
-    # Mandya
-    "ಮಂಡ್ಯ": "mandya", "ಮಂಡ್ಯದಲ್ಲಿ": "mandya", "ಮಂಡ್ಯನಲ್ಲಿ": "mandya", "mandyalli": "mandya",
-    # Haveri
-    "ಹಾವೇರಿ": "haveri", "ಹಾವೇರಿಯಲ್ಲಿ": "haveri", "haverialli": "haveri",
+    # Bagalkote
+    "bagalkot": "bagalkote", "bagalkote": "bagalkote", "ಬಾಗಲಕೋಟೆ": "bagalkote", "ಬಾಗಲಕೋಟೆಯಲ್ಲಿ": "bagalkote", "bagalkotalli": "bagalkote",
     # Ballari
-    "ಬಳ್ಳಾರಿ": "ballari", "ಬಳ್ಳಾರಿಯಲ್ಲಿ": "ballari", "ballarialli": "ballari",
-    # Bengaluru
-    "ಬೆಂಗಳೂರು": "bengaluru urban", "ಬೆಂಗಳೂರಿನಲ್ಲಿ": "bengaluru urban", "bangalore": "bengaluru urban", "bengaluru": "bengaluru urban",
+    "ballari": "ballari", "bellary": "ballari", "ಬಳ್ಳಾರಿ": "ballari", "ಬಳ್ಳಾರಿಯಲ್ಲಿ": "ballari", "ballarialli": "ballari", "bellaryalli": "ballari",
+    # Belagavi
+    "belagavi": "belagavi", "belgaum": "belagavi", "ಬೆಳಗಾವಿ": "belagavi", "ಬೆಳಗಾವಿಯಲ್ಲಿ": "belagavi", "belagavialli": "belagavi", "belgaumalli": "belagavi",
+    # Bengaluru Rural
+    "bengaluru rural": "bengaluru rural", "bangalore rural": "bengaluru rural", "ಬೆಂಗಳೂರು ಗ್ರಾಮಾಂತರ": "bengaluru rural",
+    # Bengaluru Urban
+    "bengaluru urban": "bengaluru urban", "bangalore urban": "bengaluru urban", "bangalore": "bengaluru urban", "bengaluru": "bengaluru urban",
+    "ಬೆಂಗಳೂರು": "bengaluru urban", "ಬೆಂಗಳೂರಿನಲ್ಲಿ": "bengaluru urban", "bengalurualli": "bengaluru urban", "bangalorealli": "bengaluru urban",
+    # Bidar
+    "bidar": "bidar", "ಬೀದರ್": "bidar", "ಬೀದರ್‌ನಲ್ಲಿ": "bidar", "bidaralli": "bidar",
+    # Chamarajanagar
+    "chamarajanagar": "chamarajanagar", "chamrajnagar": "chamarajanagar", "chamarajanagara": "chamarajanagar",
+    "ಚಾಮರಾಜನಗರ": "chamarajanagar", "ಚಾಮರಾಜನಗರದಲ್ಲಿ": "chamarajanagar", "chamarajanagaralli": "chamarajanagar",
+    # Chikkaballapur
+    "chikkaballapur": "chikkaballapur", "chikballapur": "chikkaballapur", "chikkaballapura": "chikkaballapur", "chikaballapur": "chikkaballapur",
+    "ಚಿಕ್ಕಬಳ್ಳಾಪುರ": "chikkaballapur", "ಚಿಕ್ಕಬಳ್ಳಾಪುರದಲ್ಲಿ": "chikkaballapur", "chikkaballapuralli": "chikkaballapur", "chikballapuralli": "chikkaballapur",
+    # Chikkamagaluru
+    "chikkamagaluru": "chikkamagaluru", "chikmagalur": "chikkamagaluru", "chickmagalur": "chikkamagaluru",
+    "ಚಿಕ್ಕಮಗಳೂರು": "chikkamagaluru", "ಚಿಕ್ಕಮಗಳೂರಿನಲ್ಲಿ": "chikkamagaluru", "chikkamagalurualli": "chikkamagaluru",
+    # Chitradurga
+    "chitradurga": "chitradurga", "chitradurg": "chitradurga", "ಚಿತ್ರದುರ್ಗ": "chitradurga", "ಚಿತ್ರದುರ್ಗದಲ್ಲಿ": "chitradurga", "chitradurgaalli": "chitradurga",
+    # Dakshina Kannada
+    "dakshina kannada": "dakshina kannada", "south canara": "dakshina kannada", "mangalore": "dakshina kannada", "mangaluru": "dakshina kannada",
+    "ದಕ್ಷಿಣ ಕನ್ನಡ": "dakshina kannada", "ಮಂಗಳೂರು": "dakshina kannada", "mangalurualli": "dakshina kannada",
+    # Davanagere
+    "davanagere": "davanagere", "davangere": "davanagere", "ದಾವಣಗೆರೆ": "davanagere", "ದಾವಣಗೆರೆಯಲ್ಲಿ": "davanagere", "davanagerealli": "davanagere", "davangerealli": "davanagere",
+    # Dharwad
+    "dharwad": "dharwad", "dharwar": "dharwad", "ಧಾರವಾಡ": "dharwad", "ಧಾರವಾಡದಲ್ಲಿ": "dharwad", "dharwadalli": "dharwad",
+    # Gadag
+    "gadag": "gadag", "ಗದುಗ": "gadag", "ಗದಗ": "gadag", "ಗದಗದಲ್ಲಿ": "gadag", "gadagalli": "gadag",
+    # Hassan
+    "hassan": "hassan", "ಹಾಸನ": "hassan", "ಹಾಸನದಲ್ಲಿ": "hassan", "hassanalli": "hassan",
+    # Haveri
+    "haveri": "haveri", "haverii": "haveri", "ಹಾವೇರಿ": "haveri", "ಹಾವೇರಿಯಲ್ಲಿ": "haveri", "haverialli": "haveri",
+    # Kalaburagi
+    "kalaburagi": "kalaburagi", "gulbarga": "kalaburagi", "ಕಲಬುರಗಿ": "kalaburagi", "ಕಲಬುರಗಿಯಲ್ಲಿ": "kalaburagi", "kalaburagialli": "kalaburagi", "gulbargaalli": "kalaburagi",
+    # Kodagu
+    "kodagu": "kodagu", "coorg": "kodagu", "mercara": "kodagu", "ಕೊಡಗು": "kodagu", "ಕೊಡಗಿನಲ್ಲಿ": "kodagu", "kodagualli": "kodagu", "coorgalli": "kodagu",
+    # Kolar
+    "kolar": "kolar", "kolara": "kolar", "ಕೋಲಾರ": "kolar", "ಕೋಲಾರದಲ್ಲಿ": "kolar", "kolaralli": "kolar",
+    # Koppal
+    "koppal": "koppal", "ಕೊಪ್ಪಳ": "koppal", "ಕೊಪ್ಪಳದಲ್ಲಿ": "koppal", "koppalalli": "koppal",
+    # Mandya
+    "mandya": "mandya", "ಮಂಡ್ಯ": "mandya", "ಮಂಡ್ಯದಲ್ಲಿ": "mandya", "mandyalli": "mandya",
+    # Mysuru
+    "mysuru": "mysuru", "mysore": "mysuru", "ಮೈಸೂರು": "mysuru", "ಮೈಸೂರಿನಲ್ಲಿ": "mysuru", "mysuralli": "mysuru", "mysorealli": "mysuru",
+    # Raichur
+    "raichur": "raichur", "ರಾಯಚೂರು": "raichur", "ರಾಯಚೂರಿನಲ್ಲಿ": "raichur", "raichuralli": "raichur",
+    # Ramanagara
+    "ramanagara": "ramanagara", "ramanagaram": "ramanagara", "ರಾಮನಗರ": "ramanagara", "ರಾಮನಗರದಲ್ಲಿ": "ramanagara", "ramanagaraalli": "ramanagara",
+    # Shivamogga
+    "shivamogga": "shivamogga", "shimoga": "shivamogga", "ಶಿವಮೊಗ್ಗ": "shivamogga", "ಶಿವಮೊಗ್ಗದಲ್ಲಿ": "shivamogga", "shivamoggalli": "shivamogga", "shimogalli": "shivamogga",
+    # Tumakuru
+    "tumakuru": "tumakuru", "tumkur": "tumakuru", "ತುಮಕೂರು": "tumakuru", "ತುಮಕೂರಿನಲ್ಲಿ": "tumakuru", "tumakuralli": "tumakuru", "tumkuralli": "tumakuru",
+    # Udupi
+    "udupi": "udupi", "udipi": "udupi", "ಉಡುಪಿ": "udupi", "ಉಡುಪಿಯಲ್ಲಿ": "udupi", "udupialli": "udupi",
+    # Uttara Kannada
+    "uttara kannada": "uttara kannada", "north canara": "uttara kannada", "karwar": "uttara kannada", "ಉತ್ತರ ಕನ್ನಡ": "uttara kannada", "ಕಾರವಾರ": "uttara kannada", "karwaralli": "uttara kannada",
+    # Vijayanagara
+    "vijayanagara": "vijayanagara", "hospet": "vijayanagara", "hosapete": "vijayanagara", "ವಿಜಯನಗರ": "vijayanagara", "ಹೊಸಪೇಟೆ": "vijayanagara", "vijayanagaraalli": "vijayanagara",
+    # Vijayapura
+    "vijayapura": "vijayapura", "bijapur": "vijayapura", "ವಿಜಯಪುರ": "vijayapura", "ಬಿಜಾಪುರ": "vijayapura", "ವಿಜಯಪುರದಲ್ಲಿ": "vijayapura", "bijapuralli": "vijayapura", "vijayapuraalli": "vijayapura",
+    # Yadgir
+    "yadgir": "yadgir", "yadgiri": "yadgir", "ಯಾದಗಿರಿ": "yadgir", "ಯಾದಗಿರಿಯಲ್ಲಿ": "yadgir", "yadgiralli": "yadgir",
 }
 
 # Fuzzy-match corpus — all known surface forms
