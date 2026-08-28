@@ -471,21 +471,19 @@ async def get_agronomy_advice(query: str, db: AsyncSession, crop: str | None = N
                 history_formatted = [f"{t['role'].upper()}: {t['content']}" for t in recent_turns]
                 history_str = "\n".join(history_formatted)
 
-        # 1. Embed query
-        query_embedding = await _embeddings.aembed_query(query)
+        chunks = []
+        if _embeddings is not None:
+            try:
+                query_embedding = await _embeddings.aembed_query(query)
+                stmt = select(KnowledgeChunk.content)
+                if crop:
+                    stmt = stmt.where(KnowledgeChunk.crop.in_([crop, "All", "General"]))
+                stmt = stmt.order_by(KnowledgeChunk.embedding.cosine_distance(query_embedding)).limit(5)
+                result = await db.execute(stmt)
+                chunks = result.scalars().all()
+            except Exception as emb_err:
+                logger.warning(f"RAG embedding lookup bypassed: {emb_err}")
 
-        # 2. Search Postgres using pgvector (retrieving top 5 chunks for broader context)
-        stmt = select(KnowledgeChunk.content)
-        
-        # Metadata filtering if crop is specified
-        if crop:
-            stmt = stmt.where(KnowledgeChunk.crop.in_([crop, "All", "General"]))
-            
-        stmt = stmt.order_by(KnowledgeChunk.embedding.cosine_distance(query_embedding)).limit(5)
-        
-        result = await db.execute(stmt)
-        chunks = result.scalars().all()
-        
         if not chunks:
             context = "No specific local database context found. Supply standard agronomy best practices for Karnataka."
         else:
