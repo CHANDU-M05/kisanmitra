@@ -14,7 +14,7 @@ from pathlib import Path
 
 # ── Setup ─────────────────────────────────────────────────
 BASE_DIR = Path(__file__).parent.parent
-load_dotenv(BASE_DIR / "config" / ".env")
+load_dotenv(BASE_DIR / ".env")
 
 API_KEY  = os.getenv("DATA_GOV_API_KEY")
 RAW_DIR  = BASE_DIR / "data" / "raw"
