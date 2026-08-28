@@ -116,3 +116,13 @@ def anomaly_keyboard() -> InlineKeyboardMarkup:
         InlineKeyboardButton(text="🏠 Main Menu", callback_data="nav:menu"),
     )
     return builder.as_markup()
+
+
+def declaration_confirm_keyboard(crop: str, district: str, area: float) -> InlineKeyboardMarkup:
+    """Confirmation keyboard before recording a sowing declaration in DB."""
+    builder = InlineKeyboardBuilder()
+    builder.row(
+        InlineKeyboardButton(text="✅ Record Declaration", callback_data=f"confirm_decl:{crop}:{district}:{area}"),
+        InlineKeyboardButton(text="❌ Cancel", callback_data="cancel_decl"),
+    )
+    return builder.as_markup()

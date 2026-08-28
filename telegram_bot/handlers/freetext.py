@@ -23,6 +23,7 @@ from telegram_bot.formatters import format_result
 from telegram_bot.keyboards import (
     advisory_followup_keyboard,
     anomaly_keyboard,
+    declaration_confirm_keyboard,
     main_menu_keyboard,
     result_keyboard,
 )
@@ -33,6 +34,12 @@ logger = logging.getLogger("kisanmitra.telegram.freetext")
 
 def _keyboard_for(result: dict):
     t = result.get("type", "error")
+    if t == "declaration_prompt":
+        return declaration_confirm_keyboard(
+            crop=result.get("crop", "Tomato"),
+            district=result.get("district", "Kolar"),
+            area=result.get("area", 1.0),
+        )
     if t in ("forecast", "saturation", "declaration"):
         return result_keyboard()
     if t == "anomaly_flagged":

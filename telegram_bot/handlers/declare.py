@@ -114,3 +114,46 @@ async def area_entered(message: Message, state: FSMContext) -> None:
         reply_markup=main_menu_keyboard(),
     )
     await state.clear()
+
+
+@router.callback_query(F.data.startswith("confirm_decl:"))
+async def confirm_declaration_callback(cb: CallbackQuery) -> None:
+    parts = cb.data.split(":")
+    if len(parts) < 4:
+        await cb.answer("Invalid request data.")
+        return
+    
+    crop, district, area_str = parts[1], parts[2], parts[3]
+    try:
+        area = float(area_str)
+    except ValueError:
+        area = 1.0
+
+    farmer_name = cb.from_user.full_name if cb.from_user else None
+
+    await cb.answer("Recording declaration in database...")
+    result = await send_to_engine(
+        sender_id=str(cb.from_user.id),
+        text=f"confirm declaration {area} acres {crop} in {district}",
+        intent="CONFIRM_DECLARE_CROP",
+        crop=crop,
+        district=district,
+        area=area,
+        farmer_name=farmer_name,
+    )
+
+    await cb.message.edit_text(
+        format_result(result),
+        parse_mode="Markdown",
+        reply_markup=main_menu_keyboard(),
+    )
+
+
+@router.callback_query(F.data == "cancel_decl")
+async def cancel_declaration_callback(cb: CallbackQuery) -> None:
+    await cb.answer("Declaration cancelled.")
+    await cb.message.edit_text(
+        "❌ *Declaration Cancelled*\n\nNo changes were made to the database.",
+        parse_mode="Markdown",
+        reply_markup=main_menu_keyboard(),
+    )

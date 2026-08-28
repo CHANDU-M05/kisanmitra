@@ -103,6 +103,17 @@ def format_declaration(r: dict) -> str:
     )
 
 
+def format_declaration_prompt(r: dict) -> str:
+    return (
+        f"📝 *Crop Declaration Confirmation*\n\n"
+        f"Would you like to record this crop declaration in our database?\n"
+        f"• Crop: *{r['crop']}*\n"
+        f"• District: *{r['district']}*\n"
+        f"• Planted Area: *{r['area']} acres*\n\n"
+        f"_Recording your sowing helps all farmers in {r['district']} track district saturation and avoid market crashes. — KisanMitra 🌾_"
+    )
+
+
 def format_advisory(r: dict) -> str:
     return r.get("text", "Sorry, I couldn't get agronomy advice right now. Please try again.")
 
@@ -153,13 +164,14 @@ def format_result(result: dict) -> str:
     """Route a structured backend result to its formatter."""
     t = result.get("type", "error")
     try:
-        if t == "forecast":        return format_forecast(result)
-        if t == "anomaly_flagged": return format_anomaly(result)
-        if t == "saturation":      return format_saturation(result)
-        if t == "declaration":     return format_declaration(result)
-        if t == "advisory":        return format_advisory(result)
-        if t == "help":            return format_help()
-        if t == "error":           return format_error(result)
+        if t == "forecast":           return format_forecast(result)
+        if t == "anomaly_flagged":    return format_anomaly(result)
+        if t == "saturation":         return format_saturation(result)
+        if t == "declaration":        return format_declaration(result)
+        if t == "declaration_prompt": return format_declaration_prompt(result)
+        if t == "advisory":           return format_advisory(result)
+        if t == "help":               return format_help()
+        if t == "error":              return format_error(result)
         return format_error({"detail": f"Unknown response type: {t!r}"})
     except Exception as exc:
         logger.exception("Formatter error for type=%s: %s", t, exc)

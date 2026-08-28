@@ -95,8 +95,9 @@ async def conversation_message(
         parsed = mh.parse("price")  # get a ParsedMessage shell with correct typing
         # Override the intent with the caller-declared one.
         try:
+            target_intent = Intent.DECLARE_CROP if body.intent == "CONFIRM_DECLARE_CROP" else Intent[body.intent]
             parsed = mh.ParsedMessage(
-                intent=Intent[body.intent],
+                intent=target_intent,
                 crop=body.crop or mh.resolve_crop(body.text),
                 district=body.district or mh.resolve_district(body.text),
                 area=body.area or mh.extract_area(body.text),
@@ -158,10 +159,18 @@ async def conversation_message(
             result = await _handle_price(crop, district, db)
 
         elif parsed.intent == Intent.DECLARE_CROP:
-            result = await _handle_declare(
-                body.sender_id, crop, district, area, db,
-                channel=body.channel, farmer_name=body.farmer_name,
-            )
+            if body.intent == "CONFIRM_DECLARE_CROP":
+                result = await _handle_declare(
+                    body.sender_id, crop, district, area, db,
+                    channel=body.channel, farmer_name=body.farmer_name,
+                )
+            else:
+                result = {
+                    "type":     "declaration_prompt",
+                    "crop":     crop,
+                    "district": district,
+                    "area":     area,
+                }
 
         elif parsed.intent == Intent.SATURATION_CHECK:
             result = await _handle_saturation(crop, district, db)
