@@ -163,6 +163,25 @@ def get_offline_fallback(query: str, crop: str | None) -> tuple[str, str]:
                 "• **Cautions**: Treat legume seeds with *Rhizobium* culture (200g/acre) prior to sowing for maximum nitrogen fixation."
             ), suffix
 
+        # 0d. Tomato & Marigold Trap Crop Intercropping
+        if any(kw in q for kw in ["marigold", "trap crop"]) or ("intercrop" in q and ("tomato" in q or "nematode" in q)):
+            return (
+                "📋 **Tomato & Marigold Trap Crop Intercropping**:\n"
+                "• **Overview**: Planting Marigold (*Tagetes erecta*) as a border/trap crop with Tomato deters Fruit Borer (*Helicoverpa armigera*) and Root-Knot Nematodes.\n"
+                "• **Actionable Steps**: Plant 1 row of Marigold for every 10–12 rows of Tomato. Marigold flowers trap adult moths away from tomato fruits, while root alpha-terthienyl suppresses nematodes.\n"
+                "• **Cautions**: Sow Marigold seeds 15 days prior to tomato transplanting so flowering coincides with tomato fruit set."
+            ), suffix
+
+        # 0e. Cabbage NPK Basal & Fertigation Schedule
+        if c == "cabbage" or any(kw in q for kw in ["cabbage", "red soil", "basal dose"]):
+            return (
+                "📋 **Cabbage NPK Basal & Fertigation Schedule (Red Soil)**:\n"
+                "• **Overview**: Cabbage requires high Nitrogen and Potassium for head formation, with balanced Phosphorus in porous red soil.\n"
+                "• **Basal Dose**: Apply FYM (10 tons/acre) + 60kg N, 50kg P, 50kg K per acre during land preparation.\n"
+                "• **Fertigation Schedule**: Drip fertigate 19:19:19 (3kg/acre/week) during vegetative phase (weeks 2–5), followed by 13:0:45 (4kg/acre/week) during head initiation (weeks 6–9).\n"
+                "• **Cautions**: Apply Boron (1kg/acre) and Calcium Nitrate (5kg/acre) at day 35 to prevent hollow stem disorder."
+            ), suffix
+
         # 1. Onion Thrips, Downy Mildew & Nematodes
         if any(kw in q for kw in ["downy mildew", "trichoderma", "purple blotch", "neck rot"]):
             return (

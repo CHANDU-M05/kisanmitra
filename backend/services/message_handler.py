@@ -85,20 +85,36 @@ _CROP_ALIASES: dict[str, str] = {
 }
 
 _DISTRICT_ALIASES: dict[str, str] = {
-    "ಚಿಕ್ಕಬಳ್ಳಾಪುರ": "chikkaballapur", "chikballapur": "chikkaballapur", "chikkaballapura": "chikkaballapur",
-    "ಕೋಲಾರ": "kolar", "kolara": "kolar",
-    "ತುಮಕೂರು": "tumakuru", "tumkur": "tumakuru", "tumakuru": "tumakuru",
-    "ಶಿವಮೊಗ್ಗ": "shivamogga", "shimoga": "shivamogga", "shivamogga": "shivamogga",
-    "ಬೆಂಗಳೂರು": "bengaluru urban", "bangalore": "bengaluru urban", "bengaluru": "bengaluru urban",
-    "ಬೆಳಗಾವಿ": "belagavi", "belgaum": "belagavi", "belagavi": "belagavi",
-    "ಮೈಸೂರು": "mysuru", "mysore": "mysuru", "mysuru": "mysuru",
-    "ದಾವಣಗೆರೆ": "davanagere", "davangere": "davanagere", "davanagere": "davanagere",
-    "ಧಾರವಾಡ": "dharwad", "dharwad": "dharwad",
-    "ಬಳ್ಳಾರಿ": "ballari", "bellary": "ballari", "ballari": "ballari",
-    "ಹಾಸನ": "hassan", "hassan": "hassan",
-    "ಹಾವೇರಿ": "haveri", "haveri": "haveri",
-    "ಮಂಡ್ಯ": "mandya", "mandya": "mandya",
-    "ವಿಜಯನಗರ": "vijayanagara", "vijayanagara": "vijayanagara",
+    # Chikkaballapur
+    "ಚಿಕ್ಕಬಳ್ಳಾಪುರ": "chikkaballapur", "ಚಿಕ್ಕಬಳ್ಳಾಪುರದಲ್ಲಿ": "chikkaballapur", "ಚಿಕ್ಕಬಳ್ಳಾಪುರನಲ್ಲಿ": "chikkaballapur",
+    "chikballapur": "chikkaballapur", "chikkaballapura": "chikkaballapur", "chikkaballapuralli": "chikkaballapur",
+    # Kolar
+    "ಕೋಲಾರ": "kolar", "ಕೋಲಾರದಲ್ಲಿ": "kolar", "ಕೋಲಾರನಲ್ಲಿ": "kolar", "kolara": "kolar", "kolaralli": "kolar",
+    # Tumakuru
+    "ತುಮಕೂರು": "tumakuru", "ತುಮಕೂರಿನಲ್ಲಿ": "tumakuru", "ತುಮಕೂರುನಲ್ಲಿ": "tumakuru", "ತುಮಕೂರಿನಲ್ಲಿ": "tumakuru",
+    "tumkur": "tumakuru", "tumakuru": "tumakuru", "tumkuralli": "tumakuru", "tumakuralli": "tumakuru",
+    # Shivamogga
+    "ಶಿವಮೊಗ್ಗ": "shivamogga", "ಶಿವಮೊಗ್ಗದಲ್ಲಿ": "shivamogga", "ಶಿವಮೊಗ್ಗನಲ್ಲಿ": "shivamogga",
+    "shimoga": "shivamogga", "shivamogga": "shivamogga", "shivamoggalli": "shivamogga", "shimogalli": "shivamogga",
+    # Mysuru
+    "ಮೈಸೂರು": "mysuru", "ಮೈಸೂರಿನಲ್ಲಿ": "mysuru", "ಮೈಸೂರುನಲ್ಲಿ": "mysuru",
+    "mysore": "mysuru", "mysuru": "mysuru", "mysuralli": "mysuru", "mysorealli": "mysuru",
+    # Davanagere
+    "ದಾವಣಗೆರೆ": "davanagere", "ದಾವಣಗೆರೆಯಲ್ಲಿ": "davanagere", "ದಾವಣಗೆರೆನಲ್ಲಿ": "davanagere",
+    "davangere": "davanagere", "davanagere": "davanagere", "davanagerealli": "davanagere",
+    # Belagavi
+    "ಬೆಳಗಾವಿ": "belagavi", "ಬೆಳಗಾವಿಯಲ್ಲಿ": "belagavi", "ಬೆಳಗಾವಿನಲ್ಲ": "belagavi",
+    "belgaum": "belagavi", "belagavi": "belagavi", "belagavialli": "belagavi",
+    # Dharwad
+    "ಧಾರವಾಡ": "dharwad", "ಧಾರವಾಡದಲ್ಲಿ": "dharwad", "ಧಾರವಾಡನಲ್ಲಿ": "dharwad", "dharwadalli": "dharwad",
+    # Mandya
+    "ಮಂಡ್ಯ": "mandya", "ಮಂಡ್ಯದಲ್ಲಿ": "mandya", "ಮಂಡ್ಯನಲ್ಲಿ": "mandya", "mandyalli": "mandya",
+    # Haveri
+    "ಹಾವೇರಿ": "haveri", "ಹಾವೇರಿಯಲ್ಲಿ": "haveri", "haverialli": "haveri",
+    # Ballari
+    "ಬಳ್ಳಾರಿ": "ballari", "ಬಳ್ಳಾರಿಯಲ್ಲಿ": "ballari", "ballarialli": "ballari",
+    # Bengaluru
+    "ಬೆಂಗಳೂರು": "bengaluru urban", "ಬೆಂಗಳೂರಿನಲ್ಲಿ": "bengaluru urban", "bangalore": "bengaluru urban", "bengaluru": "bengaluru urban",
 }
 
 # Fuzzy-match corpus — all known surface forms
@@ -173,36 +189,32 @@ class Intent(Enum):
 
 # Keywords that MUST bypass the LLM (G2)
 _PRICE_KEYWORDS = [
-    "ಬೆಲೆ", "ಬೆಲ", "price", "rate", "mandi", "ಮಂಡಿ", "ಧರ", "ಧಾರಣೆ",
+    "ಬೆಲೆ", "ಬೆಲ", "price", "rate", "mandi", "ಮಂಡಿ", "ಧರ", "ಧಾರಣೆ", "forecast", "60 day", "projected", "yeshtu", "eshtu", " ivattu", " today"
 ]
 _SATURATION_KEYWORDS = [
-    "saturation", "ಸ್ಯಾಚುರೇಷನ್", "risk", "ಅಪಾಯ",
-    "how many farmers", "ಎಷ್ಟು ರೈತರು", "registered acreage", "total acreage", "risk level",
+    "saturation", "ಸ್ಯಾಚುರೇಷನ್", "risk", "ಅಪಾಯ", "ಎಷ್ಟು ಎಕರೆ", "ಎಷ್ಟು ರೈತರು", "ಇಗಾಗಲೇ ಬಿತ್ತನೆ", "ಇಾಗಲೇ ಬಿತ್ತನೆ",
+    "how many farmers", "how many acres", "already planted", "already sown", "registered acreage", "total acreage", "risk level",
 ]
 _DECLARE_KEYWORDS = [
-    "ಎಕರೆ", "acres", "acre", "declare", "ಬೆಳೆ ಹಾಕಿದ್ದೇನೆ",
-    "ನಾನು ಬೆಳೆ", "crop sown", "planted", "sown", "growing",
+    "declare", "ಬೆಳೆ ಹಾಕಿದ್ದೇನೆ", "ನಾನು ಬೆಳೆ", "crop sown", "planted", "sown", "hakidini", "ಹಾಕಿದಿನಿ", "ಹಾಕಿದ್ದೇನೆ", "register my crop", "record madi", "ನೋಂದಣಿ"
 ]
 # Only agronomy questions go to the LLM
 _AGRONOMY_KEYWORDS = [
     # English terms
-    "disease", "rot", "blight", "wilt", "borer", "virus", "pest", "thrips",
+    "disease", "rot", "blight", "wilt", "borer", "virus", "pest", "thrips", "nematode", "nematodes", "root-knot", "root knot",
     "fertilizer", "fertilizers", "dose", "dosage", "npk", "urea", "dap", "mop", "ratio", "basal", "fym",
     "boron", "metalaxyl", "mancozeb", "copper", "oxychloride", "pesticide", "fungicide",
-    "insecticide", "weather", "rain", "monsoon", "seed", "irrigation", "water", "watering",
-    "soil", "loam", "nitrogen", "phosphorus", "potassium", "gypsum", "advice", "help",
+    "insecticide", "rain", "monsoon", "seed", "irrigation", "water", "watering",
+    "soil", "loam", "nitrogen", "phosphorus", "potassium", "gypsum", "advice",
     "treatment", "prevention", "control", "drenching", "application", "spray", "spraying",
     "yellow", "leaves", "leaf", "rotate", "rotation", "harvest", "harvesting", "spacing",
-    "care", "grow", "manage", "tips", "yield", "how to", "what to", "what if", "which",
-    "should i", "can i", "how much", "exact dosage", "recommended", "intercrop",
+    "care", "grow", "manage", "tips", "yield", "exact dosage", "recommended", "intercrop", "intercropping",
     # Kannada script terms
     "ರೋಗ", "ಕೊಳೆ", "ಕರಕು", "ಕುತ್ತಿಗೆ", "ಗೊಬ್ಬರ", "ಕೀಟನಾಶಕ", "ಔಷಧಿ", "ಮಳೆ", "ಬೀಜ",
-    "ನೀರಾವರಿ", "ಮಣ್ಣು", "ಸಲಹೆ", "ಸಹಾಯ", "ಹೇಗೆ", "ಏನು ಮಾಡಲಿ", "ಏನು ಮಾಡಬೇಕು", "ಇಳುವರಿ",
-    "ಹೆಚ್ಚಿಸಲು", "ಮಾಡಬೇಕು", "ಸಲಹೆಗಳು", "ನೀರು", "ನಿಯಂತ್ರಣ", "ಕಟಾವು", "ಹುಳು",
-    "ಸೈನಿಕ ಹುಳು", "ಎಲೆ", "ಹಳದಿ", "ಸಿಂಪಡಿಸಬೇಕು", "ಪ್ರಮಾಣ",
+    "ನೀರಾವರಿ", "ಮಣ್ಣು", "ಸಲಹೆ", "ಇಳುವರಿ", "ಹೆಚ್ಚಿಸಲು", "ಸಲಹೆಗಳು", "ನೀರು", "ನಿಯಂತ್ರಣ", "ಕಟಾವು", "ಹುಳು",
+    "ಸೈನಿಕ ಹುಳು", "ಗಂಟು ಹುಳು", "ಎಲೆ", "ಹಳದಿ", "ಸಿಂಪಡಿಸಬೇಕು", "ಪ್ರಮಾಣ",
     # Kanglish (Romanized Kannada) terms
-    "roga", "hula", "aushadhi", "gobbara", "madabeku", "spray madabeku", "thundu",
-    "gantu", "neeru", "beleli", "salaha", "sagida"
+    "roga", "hula", "aushadhi", "gobbara", "madabeku", "spray madabeku", "thundu", "gantu", "neeru", "beleli", "salaha", "sagida"
 ]
 
 
@@ -226,10 +238,12 @@ def parse(text: str) -> ParsedMessage:
 
     crop     = resolve_crop(text)
     district = resolve_district(text)
+    area     = extract_area(text)
 
-    # Generic greetings return UNKNOWN -> renders format_help()
-    _GREETINGS = {"hello", "hi", "hey", "thanks", "thank you", "ಧನ್ಯವಾದಗಳು", "ನಮಸ್ಕಾರ"}
-    if tl in _GREETINGS:
+    # 1. Pure Smalltalk / Greetings / Unrelated conversation -> UNKNOWN -> Help Menu
+    _SMALLTALK_TERMS = ["namaskara", "hegideera", "cricket", "weather", "bombat", "hello", "hi", "hey", "good morning", "good evening", "thanks", "thank you", "what can you do", "help"]
+    is_smalltalk = any(term in tl for term in _SMALLTALK_TERMS) and not any(kw in tl for kw in ["price", "rate", "bela", "mandi", "disease", "rot", "spray", "acre", "sowed", "planted", "hakidini"])
+    if is_smalltalk or (not crop and not district and not any(kw in tl for kw in _PRICE_KEYWORDS + _SATURATION_KEYWORDS + _AGRONOMY_KEYWORDS)):
         return ParsedMessage(
             intent   = Intent.UNKNOWN,
             crop     = crop,
@@ -238,7 +252,7 @@ def parse(text: str) -> ParsedMessage:
             raw_text = text,
         )
 
-    # 1. Saturation risk check MUST take top priority over declarations & agronomy
+    # 2. Saturation risk check MUST take top priority over declarations & agronomy
     if any(kw in tl for kw in _SATURATION_KEYWORDS):
         return ParsedMessage(
             intent   = Intent.SATURATION_CHECK,
@@ -248,7 +262,7 @@ def parse(text: str) -> ParsedMessage:
             raw_text = text,
         )
 
-    # 2. Price query check MUST take priority if explicit price/mandi keywords exist
+    # 3. Price query check MUST take priority if explicit price/mandi keywords exist
     if any(kw in tl for kw in _PRICE_KEYWORDS):
         return ParsedMessage(
             intent   = Intent.PRICE_QUERY,
@@ -258,7 +272,17 @@ def parse(text: str) -> ParsedMessage:
             raw_text = text,
         )
 
-    # 3. Agronomy advice check
+    # 4. Sowing declaration check: requires crop + explicit declaration verb + explicit acreage number!
+    if crop and area is not None and any(kw in tl for kw in _DECLARE_KEYWORDS):
+        return ParsedMessage(
+            intent   = Intent.DECLARE_CROP,
+            crop     = crop,
+            district = district,
+            area     = area,
+            raw_text = text,
+        )
+
+    # 5. Agronomy advice check
     if any(kw in tl for kw in _AGRONOMY_KEYWORDS):
         return ParsedMessage(
             intent   = Intent.AGRONOMY_ADVICE,
@@ -268,27 +292,7 @@ def parse(text: str) -> ParsedMessage:
             raw_text = text,
         )
 
-    # 4. Sowing declaration check (crop + declare keywords)
-    if crop and any(kw in tl for kw in _DECLARE_KEYWORDS):
-        return ParsedMessage(
-            intent   = Intent.DECLARE_CROP,
-            crop     = crop,
-            district = district,
-            area     = extract_area(text),
-            raw_text = text,
-        )
-
-    # 5. Implicit declaration if crop and explicit acreage number mentioned without agronomy/saturation terms
-    if crop and re.search(r"\b[\d.]+\s*(acre|acres|ಎಕರೆ)", text, re.IGNORECASE):
-        return ParsedMessage(
-            intent   = Intent.DECLARE_CROP,
-            crop     = crop,
-            district = district,
-            area     = extract_area(text),
-            raw_text = text,
-        )
-
-    # 6. Fallback: Free-text query with crop mentioned -> Agronomy AI
+    # 6. Fallback with crop mentioned -> Agronomy AI
     if crop and len(tl.split()) > 1:
         return ParsedMessage(
             intent   = Intent.AGRONOMY_ADVICE,
