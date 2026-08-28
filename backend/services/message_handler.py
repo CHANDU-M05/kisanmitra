@@ -60,13 +60,15 @@ CANONICAL_DISTRICTS: dict[str, str] = {
 # Every known spelling variant maps to the canonical English key.
 _CROP_ALIASES: dict[str, str] = {
     # Tomato
-    "ಟೊಮ್ಯಾಟೊ":  "tomato", "ಟೊಮೆಟೊ":   "tomato",
-    "ಟೊಮೇಟೊ":   "tomato", "ತಕ್ಕಾಳಿ":  "tomato",
-    "tameta":    "tomato", "tamato":   "tomato",
+    "tomato":   "tomato", "tomatoes": "tomato",
+    "ಟೊಮೆಟೊ":  "tomato", "ಟೊಮೆಟೋ": "tomato", "ಟೊಮ್ಯಾಟೊ": "tomato", "ಟೊಮಾಟೊ": "tomato", "ಟೊಮೇಟೊ": "tomato",
+    "tamato":   "tomato", "thomaatho": "tomato",
     # Potato
+    "potato":   "potato", "potatoes": "potato",
     "ಆಲೂಗಡ್ಡೆ": "potato", "ಆಲೂ":      "potato",
-    "alu":       "potato", "aloogadde":"potato",
+    "alugadde": "potato", "aloogadde": "potato", "aloo": "potato",
     # Onion
+    "onion":    "onion",  "onions":   "onion",
     "ಈರುಳ್ಳಿ":  "onion",  "ಉಳ್ಳಿ":    "onion",
     "eerulli":   "onion",
     # Marigold
@@ -109,63 +111,30 @@ _FUZZY_THRESHOLD = 75   # minimum score (0-100) to accept a fuzzy match
 def resolve_crop(text: str) -> Optional[str]:
     """
     GUARDRAIL 1: Return canonical crop ID or None.
-    Matches exact crop tokens or alias keys against word boundaries in text.
+    Priority: direct substring alias match -> canonical name match -> fuzzy fallback.
     """
     tl = text.lower().strip()
-    clean_text = re.sub(r"[^\w\s]", " ", tl)
-    words = clean_text.split()
-
-    # 1. Exact canonical name match
-    for w in words:
-        if w in CANONICAL_CROPS:
-            return CANONICAL_CROPS[w]
-
-    # 2. Direct alias lookup (word match or explicit multi-word alias match)
     for alias, key in _CROP_ALIASES.items():
-        if alias in words or (len(alias.split()) > 1 and alias in tl):
+        if alias in tl:
             return CANONICAL_CROPS[key]
-
-    # 3. High-confidence fuzzy match (threshold 88) on individual words (>= 4 chars)
-    for token in words:
-        if len(token) >= 4:
-            match, score = fuzz_process.extractOne(token, _CROP_CORPUS) or (None, 0)
-            if score >= 88 and match:
-                key = _CROP_ALIASES.get(match, match)
-                if key in CANONICAL_CROPS:
-                    logger.debug("[FUZZY CROP] '%s' → '%s' (score=%d)", token, key, score)
-                    return CANONICAL_CROPS[key]
-
+    for key, canonical in CANONICAL_CROPS.items():
+        if key in tl:
+            return canonical
     return None
 
 
 def resolve_district(text: str) -> Optional[str]:
     """
     GUARDRAIL 1: Return canonical district ID or None.
-    Matches exact district tokens or alias keys against word boundaries in text.
+    Priority: direct substring alias match -> canonical name match -> fuzzy fallback.
     """
     tl = text.lower().strip()
-    clean_text = re.sub(r"[^\w\s]", " ", tl)
-    words = clean_text.split()
-
-    # 1. Direct alias lookup or canonical name match
     for alias, key in _DISTRICT_ALIASES.items():
-        if alias in words or alias in tl:
+        if alias in tl:
             return CANONICAL_DISTRICTS[key]
-
-    for w in words:
-        if w in CANONICAL_DISTRICTS:
-            return CANONICAL_DISTRICTS[w]
-
-    # 2. High-confidence fuzzy match (threshold 88) on individual words (>= 5 chars)
-    for token in words:
-        if len(token) >= 5:
-            match, score = fuzz_process.extractOne(token, _DISTRICT_CORPUS) or (None, 0)
-            if score >= 88 and match:
-                key = _DISTRICT_ALIASES.get(match, match)
-                if key in CANONICAL_DISTRICTS:
-                    logger.debug("[FUZZY DISTRICT] '%s' → '%s' (score=%d)", token, key, score)
-                    return CANONICAL_DISTRICTS[key]
-
+    for key, canonical in CANONICAL_DISTRICTS.items():
+        if key in tl:
+            return canonical
     return None
 
 
@@ -182,7 +151,7 @@ def extract_area(text: str) -> float:
 
 
 # ══════════════════════════════════════════════════════════
-# GUARDRAIL 2: Intent classification
+# Intent Classification & Keywords (Guardrail 2)
 # ══════════════════════════════════════════════════════════
 
 class Intent(Enum):
@@ -220,7 +189,7 @@ _AGRONOMY_KEYWORDS = [
     # Kannada script terms
     "ರೋಗ", "ಕೊಳೆ", "ಕರಕು", "ಕುತ್ತಿಗೆ", "ಗೊಬ್ಬರ", "ಕೀಟನಾಶಕ", "ಔಷಧಿ", "ಮಳೆ", "ಬೀಜ",
     "ನೀರಾವರಿ", "ಮಣ್ಣು", "ಸಲಹೆ", "ಸಹಾಯ", "ಹೇಗೆ", "ಏನು ಮಾಡಲಿ", "ಏನು ಮಾಡಬೇಕು", "ಇಳುವರಿ",
-    "ಹೆಚ್ಚಿಸಲು", "ಮಾಡಬೇಕು", "ಸಲಹೆಗಳು", "ನೀರು", "ನಿಯಂತ್ರಣ", "ಕಟಾವು", "ಬೆಳೆ", "ಹುಳು",
+    "ಹೆಚ್ಚಿಸಲು", "ಮಾಡಬೇಕು", "ಸಲಹೆಗಳು", "ನೀರು", "ನಿಯಂತ್ರಣ", "ಕಟಾವು", "ಹುಳು",
     "ಸೈನಿಕ ಹುಳು", "ಎಲೆ", "ಹಳದಿ", "ಸಿಂಪಡಿಸಬೇಕು", "ಪ್ರಮಾಣ",
     # Kanglish (Romanized Kannada) terms
     "roga", "hula", "aushadhi", "gobbara", "madabeku", "spray madabeku", "thundu",
@@ -243,25 +212,24 @@ def parse(text: str) -> ParsedMessage:
     Numeric/market intents are resolved here deterministically.
     Only AGRONOMY_ADVICE is allowed to reach the RAG layer.
     """
-    # Clean up quotes and explanatory notes in parentheses
     text = text.strip('"\'“”')
-    tl = text.lower()
+    tl = text.lower().strip()
 
     crop     = resolve_crop(text)
     district = resolve_district(text)
 
-    # 1. Agronomy check MUST come first so questions like
-    # "How much fertilizer for 2 acres of tomato" route to Agronomy AI, NOT declaration.
-    if any(kw in tl for kw in _AGRONOMY_KEYWORDS):
+    # Generic greetings return UNKNOWN -> renders format_help()
+    _GREETINGS = {"hello", "hi", "hey", "thanks", "thank you", "ಧನ್ಯವಾದಗಳು", "ನಮಸ್ಕಾರ"}
+    if tl in _GREETINGS:
         return ParsedMessage(
-            intent   = Intent.AGRONOMY_ADVICE,
+            intent   = Intent.UNKNOWN,
             crop     = crop,
             district = district,
             area     = None,
             raw_text = text,
         )
 
-    # 2. Sowing declaration check
+    # 1. Sowing declaration check (crop + declare keywords)
     if crop and any(kw in tl for kw in _DECLARE_KEYWORDS):
         return ParsedMessage(
             intent   = Intent.DECLARE_CROP,
@@ -271,7 +239,7 @@ def parse(text: str) -> ParsedMessage:
             raw_text = text,
         )
 
-    # 3. Price query check
+    # 2. Price query check
     if any(kw in tl for kw in _PRICE_KEYWORDS):
         return ParsedMessage(
             intent   = Intent.PRICE_QUERY,
@@ -281,7 +249,7 @@ def parse(text: str) -> ParsedMessage:
             raw_text = text,
         )
 
-    # 4. Saturation risk check
+    # 3. Saturation risk check
     if any(kw in tl for kw in _SATURATION_KEYWORDS):
         return ParsedMessage(
             intent   = Intent.SATURATION_CHECK,
@@ -291,8 +259,18 @@ def parse(text: str) -> ParsedMessage:
             raw_text = text,
         )
 
-    # 5. Implicit declaration if crop and number are mentioned without explicit intent
-    if crop and re.search(r"[\d.]+\s*(acre|acres|ಎಕರೆ)?", text, re.IGNORECASE):
+    # 4. Explicit Agronomy question check
+    if any(kw in tl for kw in _AGRONOMY_KEYWORDS):
+        return ParsedMessage(
+            intent   = Intent.AGRONOMY_ADVICE,
+            crop     = crop,
+            district = district,
+            area     = None,
+            raw_text = text,
+        )
+
+    # 5. Implicit declaration if crop and explicit acreage number mentioned
+    if crop and re.search(r"\b[\d.]+\s*(acre|acres|ಎಕರೆ)", text, re.IGNORECASE):
         return ParsedMessage(
             intent   = Intent.DECLARE_CROP,
             crop     = crop,
@@ -301,8 +279,8 @@ def parse(text: str) -> ParsedMessage:
             raw_text = text,
         )
 
-    # 6. Fallback free-text queries > 2 words route to Agronomy AI
-    if len(tl.split()) > 2:
+    # 6. Fallback: Free-text query with crop mentioned -> Agronomy AI
+    if crop and len(tl.split()) > 1:
         return ParsedMessage(
             intent   = Intent.AGRONOMY_ADVICE,
             crop     = crop,

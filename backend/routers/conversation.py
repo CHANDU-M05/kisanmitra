@@ -180,9 +180,11 @@ async def conversation_message(
             result = {"type": "advisory", "text": advice, "crop": crop}
 
         else:
-            # World-Class Intelligent Fallback: Route any free-text query to Gemini 2.5 Flash RAG Advisory
-            advice = await get_agronomy_advice(body.text, db, crop=crop, phone_number=body.sender_id)
-            result = {"type": "advisory", "text": advice, "crop": crop}
+            if not (body.crop or parsed.crop or body.district or parsed.district):
+                result = {"type": "help"}
+            else:
+                advice = await get_agronomy_advice(body.text, db, crop=crop, phone_number=body.sender_id)
+                result = {"type": "advisory", "text": advice, "crop": crop}
 
     except Exception as exc:
         logger.exception("Conversation engine error for sender=%s: %s", body.sender_id, exc)
