@@ -193,7 +193,7 @@ _AGRONOMY_KEYWORDS = [
     "ಸೈನಿಕ ಹುಳು", "ಎಲೆ", "ಹಳದಿ", "ಸಿಂಪಡಿಸಬೇಕು", "ಪ್ರಮಾಣ",
     # Kanglish (Romanized Kannada) terms
     "roga", "hula", "aushadhi", "gobbara", "madabeku", "spray madabeku", "thundu",
-    "gantu", "neeru", "beleli", "salaha", "ide", "yav", "estu", "sagida"
+    "gantu", "neeru", "beleli", "salaha", "sagida"
 ]
 
 
@@ -239,20 +239,20 @@ def parse(text: str) -> ParsedMessage:
             raw_text = text,
         )
 
-    # 2. Agronomy advice check MUST precede sowing declarations (so dosage/treatment queries with acre numbers route to advisory)
-    if any(kw in tl for kw in _AGRONOMY_KEYWORDS):
+    # 2. Price query check MUST take priority if explicit price/mandi keywords exist
+    if any(kw in tl for kw in _PRICE_KEYWORDS):
         return ParsedMessage(
-            intent   = Intent.AGRONOMY_ADVICE,
+            intent   = Intent.PRICE_QUERY,
             crop     = crop,
             district = district,
             area     = None,
             raw_text = text,
         )
 
-    # 3. Price query check
-    if any(kw in tl for kw in _PRICE_KEYWORDS):
+    # 3. Agronomy advice check
+    if any(kw in tl for kw in _AGRONOMY_KEYWORDS):
         return ParsedMessage(
-            intent   = Intent.PRICE_QUERY,
+            intent   = Intent.AGRONOMY_ADVICE,
             crop     = crop,
             district = district,
             area     = None,

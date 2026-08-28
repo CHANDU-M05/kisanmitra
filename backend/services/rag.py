@@ -223,6 +223,38 @@ def get_offline_fallback(query: str, crop: str | None) -> tuple[str, str]:
                 "• **Cautions**: Perform earthing-up to prevent exposed green tubers."
             ), suffix
 
+        if c == "cabbage":
+            return (
+                "📋 **Cabbage Crop Health & Diamondback Moth Control**:\n"
+                "• **Overview**: Diamondback moth (DBM) larvae and black rot reduce head formation and marketability.\n"
+                "• **Actionable Steps**: Apply FYM (10t/acre) + NPK (60:50:50). Spray Chlorantraniliprole (0.4ml/L) or Bt (2g/L) for DBM control.\n"
+                "• **Cautions**: Ensure 45x30cm plant spacing and avoid over-irrigation during head formation."
+            ), suffix
+
+        if c == "ragi":
+            return (
+                "📋 **Ragi (Finger Millet) Blast & Management**:\n"
+                "• **Overview**: Neck blast and finger blast damage grain fill during ears head stage.\n"
+                "• **Actionable Steps**: Spray Tricyclazole 75 WP (0.6g/L) or Carbendazim (1g/L) at earhead emergence.\n"
+                "• **Cautions**: Apply 100kg Complex (15:15:15) basal dose per acre."
+            ), suffix
+
+        if c == "brinjal":
+            return (
+                "📋 **Brinjal Fruit & Shoot Borer Management**:\n"
+                "• **Overview**: Shoot and fruit borer (*Leucinodes orbonalis*) causes wilted shoots and bored fruits.\n"
+                "• **Actionable Steps**: Clip wilted shoots weekly. Spray Emamectin Benzoate (0.4g/L) or Spinetoram (0.9ml/L).\n"
+                "• **Cautions**: Use pheromone traps (12/acre) for early monitoring."
+            ), suffix
+
+        if c == "marigold":
+            return (
+                "📋 **Marigold Flower Growth & Leaf Spot Management**:\n"
+                "• **Overview**: Alternaria leaf spot and bud borer degrade flower size and bloom quantity.\n"
+                "• **Actionable Steps**: Spray Mancozeb (2g/L) for leaf spot. Pinch apical terminal shoots at 30 days to encourage branching.\n"
+                "• **Cautions**: Apply 13:0:45 @ 5g/L foliar spray prior to flowering."
+            ), suffix
+
         return (
             "📋 **Crop Health & Agronomy Management Guide**:\n"
             "• **Irrigation**: Maintain optimum soil moisture according to crop growth stage.\n"

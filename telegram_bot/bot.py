@@ -73,13 +73,16 @@ async def main() -> None:
 
     # ── Register bot commands in Telegram's command menu ──────────────────────
     from aiogram.types import BotCommand
-    await bot.set_my_commands([
-        BotCommand(command="start",   description="Welcome & main menu 🌾"),
-        BotCommand(command="help",    description="What KisanMitra can do"),
-        BotCommand(command="mycrops", description="View your sowing declarations 🌱"),
-        BotCommand(command="cancel",  description="Cancel current action"),
-    ])
-    logger.info("Bot commands registered with Telegram.")
+    try:
+        await bot.set_my_commands([
+            BotCommand(command="start",   description="Welcome & main menu 🌾"),
+            BotCommand(command="help",    description="What KisanMitra can do"),
+            BotCommand(command="mycrops", description="View your sowing declarations 🌱"),
+            BotCommand(command="cancel",  description="Cancel current action"),
+        ])
+        logger.info("Bot commands registered with Telegram.")
+    except Exception as cmd_err:
+        logger.warning(f"Could not register Telegram bot commands (network timeout/warning): {cmd_err}")
 
     # ── Start ────────────────────────────────────────────────────────────────
     if WEBHOOK_URL:
