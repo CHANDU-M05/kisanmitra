@@ -1,0 +1,5 @@
+Experiment,MAPE (%),Median MAPE (%),MAE (₹/q),RMSE (₹/q),R2,Directional Acc (%),Fit Time (s)
+D1: CatBoost + Spatial (Control),35.86,27.32,704.47,1107.86,0.0306,65.43,7.36
+D3: CatBoost + Spatial + Weather,35.35,27.05,702.26,1111.36,0.0245,65.5,9.26
+D2: LightGBM + Spatial (Control),37.02,28.01,719.9,1119.67,0.0099,65.03,2.63
+D3: LightGBM + Spatial + Weather,36.28,27.33,713.21,1118.03,0.0128,65.36,2.75

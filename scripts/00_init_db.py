@@ -15,22 +15,29 @@ import asyncio
 import sys
 from pathlib import Path
 
-# Allow importing api.core from the project root
+# Allow importing backend.core from the project root
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 import sqlalchemy as sa
 from sqlalchemy.ext.asyncio import create_async_engine
 
-from api.core.config import settings
-from api.core.database import Base
+from backend.core.config import settings
+from backend.core.database import Base
 
 # Import all models so Base.metadata is populated
-from api.core.models import (  # noqa: F401
+from backend.core.models import (  # noqa: F401
     CropDeclaration,
     Farmer,
     KnowledgeChunk,
     MandiPrice,
+    AdminUser,
+    RevokedToken,
+    ChatHistory,
 )
+
+from passlib.context import CryptContext
+
+pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 
 
 async def init_db() -> None:
@@ -49,6 +56,63 @@ async def init_db() -> None:
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
     print("   All tables created ✓")
+
+    print("\n── Applying idempotency index & schema updates (safe to re-run) ──")
+    # Base.metadata.create_all only creates missing tables/indexes for NEW databases.
+    # For EXISTING databases, we clean up any pre-existing duplicate rows first,
+    # then issue CREATE UNIQUE INDEX IF NOT EXISTS explicitly.
+    # PostgreSQL advisory lock 888999 ensures multi-worker concurrent app boots race safely.
+    async with engine.begin() as conn:
+        try:
+            await conn.execute(sa.text("SELECT pg_advisory_lock(888999);"))
+        except Exception:
+            pass  # Non-PostgreSQL dialects (e.g. SQLite) ignore advisory locks
+
+        try:
+            # Deduplicate existing rows prior to index creation (keeps highest ID)
+            await conn.execute(sa.text("""
+                DELETE FROM crop_declarations a
+                USING crop_declarations b
+                WHERE a.id < b.id
+                  AND lower(a.phone) = lower(b.phone)
+                  AND lower(a.crop) = lower(b.crop)
+                  AND lower(a.district) = lower(b.district)
+                  AND a.season = b.season;
+            """))
+            await conn.execute(sa.text("""
+                CREATE UNIQUE INDEX IF NOT EXISTS uq_decl_phone_crop_district_season
+                ON crop_declarations (lower(phone), lower(crop), lower(district), season);
+            """))
+            await conn.execute(sa.text("""
+                ALTER TABLE chat_history ADD COLUMN IF NOT EXISTS channel VARCHAR(20) DEFAULT 'web';
+            """))
+            await conn.execute(sa.text("""
+                ALTER TABLE chat_history ADD COLUMN IF NOT EXISTS crop VARCHAR(100);
+            """))
+            await conn.execute(sa.text("""
+                ALTER TABLE chat_history ADD COLUMN IF NOT EXISTS district VARCHAR(100);
+            """))
+        finally:
+            try:
+                await conn.execute(sa.text("SELECT pg_advisory_unlock(888999);"))
+            except Exception:
+                pass
+    print("   uq_decl_phone_crop_district_season & chat_history entity/channel columns ✓")
+    
+    print("\n── Seeding Admin User ──")
+    from sqlalchemy.orm import sessionmaker
+    async_session = sessionmaker(engine, class_=sa.ext.asyncio.AsyncSession, expire_on_commit=False)
+    
+    async with async_session() as session:
+        result = await session.execute(sa.select(AdminUser).where(AdminUser.username == "admin"))
+        if not result.scalar_one_or_none():
+            hashed_pw = pwd_context.hash("admin123")
+            admin = AdminUser(username="admin", hashed_password=hashed_pw)
+            session.add(admin)
+            await session.commit()
+            print("   Default admin user seeded (admin / admin123) ✓")
+        else:
+            print("   Admin user already exists ✓")
 
     await engine.dispose()
     print("\n✅  KisanMitra DB initialized. Ready for data ingestion.\n")

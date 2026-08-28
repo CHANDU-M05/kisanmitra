@@ -1,12 +1,25 @@
-# Python
+# Python & Testing
 venv/
 __pycache__/
 *.pyc
 *.pyo
 *.pyd
 .Python
+.pytest_cache/
+.coverage
+htmlcov/
 
-# Model files (too large for GitHub)
+# Node / Frontend
+node_modules/
+dist/
+build/
+.vite/
+
+# Archives & Temporary
+*.zip
+*.tar.gz
+
+# Model files & Raw Data (too large for GitHub)
 data/models/*.pkl
 data/raw/*.csv
 data/processed/*.csv
@@ -17,22 +30,16 @@ data/processed/*.csv
 config/
 credentials/
 
-# n8n data
-n8n/data/
-
-# Database
+# Database & Logs
 *.sql.bak
+*.db
+logs/
 
-# OS
+# OS & IDE
 .DS_Store
 Thumbs.db
-
-# IDE
 .vscode/
 .idea/
-
-# Application logs
-logs/
 
 # SSL Certificates
 certbot/

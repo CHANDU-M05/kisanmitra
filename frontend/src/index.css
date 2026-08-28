@@ -1,0 +1,31 @@
+@import url('https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;700&family=Plus+Jakarta+Sans:wght@400;500;600;700&display=swap');
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  html {
+    /* Set base font-size to 17.5px to scale up all rem-based text sizes by ~9.3% */
+    font-size: 17.5px;
+  }
+  body {
+    @apply font-sans bg-slate-50 text-slate-900 dark:bg-slate-950 dark:text-slate-50;
+  }
+}
+
+/* Override absolute arbitrary pixel font-size utilities to scale up non-rem text */
+@layer utilities {
+  .text-\[8px\] {
+    font-size: 9.5px !important;
+  }
+  .text-\[9px\] {
+    font-size: 10.5px !important;
+  }
+  .text-\[10px\] {
+    font-size: 11.5px !important;
+  }
+  .text-\[11px\] {
+    font-size: 12.5px !important;
+  }
+}

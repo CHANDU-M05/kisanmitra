@@ -14,19 +14,20 @@ import sys
 from pathlib import Path
 from typing import List
 
-# Allow importing api.core from the project root
+# Allow importing backend.core from the project root
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from api.core.logging_config import setup_kisanmitra_logging
+from backend.core.logging_config import setup_kisanmitra_logging
 logger = setup_kisanmitra_logging("kisanmitra.ingestion")
 
 from pydantic import BaseModel, Field
-from openai import AsyncOpenAI
+from google import genai
+from google.genai import types
 from sqlalchemy import insert
 
-from api.core.config import settings
-from api.core.database import AsyncSessionLocal
-from api.core.models import KnowledgeChunk, _HAS_PGVECTOR
+from backend.core.config import settings
+from backend.core.database import AsyncSessionLocal
+from backend.core.models import KnowledgeChunk, _HAS_PGVECTOR
 
 # ── Schemas ───────────────────────────────────────────────
 
@@ -58,7 +59,7 @@ RULES:
 
 # ── Pipeline ──────────────────────────────────────────────
 
-client = AsyncOpenAI(api_key=settings.openai_api_key)
+client = genai.Client(api_key=settings.gemini_api_key)
 
 async def call_with_retry(func, *args, **kwargs):
     """Robust retry logic with exponential backoff."""
@@ -69,15 +70,15 @@ async def call_with_retry(func, *args, **kwargs):
         except Exception as e:
             if "rate_limit" in str(e).lower() or "timeout" in str(e).lower() or attempt < 2:
                 wait_time = (2 ** attempt) + 1
-                print(f"⚠️ OpenAI API Error: {e}. Retrying in {wait_time}s... (Attempt {attempt+1}/{max_retries})")
+                print(f"⚠️ API Error: {e}. Retrying in {wait_time}s... (Attempt {attempt+1}/{max_retries})")
                 await asyncio.sleep(wait_time)
             else:
                 raise e
-    raise Exception("Max retries exceeded for OpenAI API call")
+    raise Exception("Max retries exceeded for API call")
 
 async def process_and_ingest_bulletin(raw_text: str, source_name: str):
-    if not settings.openai_api_key:
-        print("❌ OPENAI_API_KEY not set.")
+    if not settings.gemini_api_key:
+        print("❌ GEMINI_API_KEY not set.")
         return
 
     print("🧠 Extracting structured agronomy chunks...")
@@ -85,16 +86,18 @@ async def process_and_ingest_bulletin(raw_text: str, source_name: str):
     try:
         # Pass 1: Agentic Extraction (with retry)
         completion = await call_with_retry(
-            client.beta.chat.completions.parse,
-            model="gpt-4o-mini",
-            messages=[
-                {"role": "system", "content": BEAST_PROMPT},
-                {"role": "user", "content": f"Extract data from this ICAR bulletin:\n\n{raw_text}"}
-            ],
-            response_format=DocumentExtraction,
+            client.aio.models.generate_content,
+            model='gemini-2.5-flash',
+            contents=f"Extract data from this ICAR bulletin:\n\n{raw_text}",
+            config=types.GenerateContentConfig(
+                system_instruction=BEAST_PROMPT,
+                response_mime_type="application/json",
+                response_schema=DocumentExtraction,
+                temperature=0.2,
+            ),
         )
         
-        extracted_data = completion.choices[0].message.parsed
+        extracted_data = DocumentExtraction.model_validate_json(completion.text)
         if not extracted_data or not extracted_data.chunks:
             print("⚠️ No actionable data found.")
             return
@@ -104,16 +107,17 @@ async def process_and_ingest_bulletin(raw_text: str, source_name: str):
         
         # Pass 2: Batch Embedding Generation (with retry)
         embedding_response = await call_with_retry(
-            client.embeddings.create,
-            model="text-embedding-3-small",
-            input=texts_to_embed
+            client.aio.models.embed_content,
+            model="gemini-embedding-2",
+            contents=texts_to_embed,
+            output_dimensionality=768
         )
         
         print("💾 Sinking to KisanMitra Database...")
         async with AsyncSessionLocal() as session:
             async with session.begin():
                 for i, chunk in enumerate(extracted_data.chunks):
-                    vector = embedding_response.data[i].embedding
+                    vector = embedding_response.embeddings[i].values
                     
                     stmt = insert(KnowledgeChunk).values(
                         crop=chunk.crop,

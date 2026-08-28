@@ -1,0 +1,6 @@
+Target Definition,Matching Rows,Test Rows,MAPE (%),MAE (Rs),R2 Score
+Original shift(-60),9672,1935,19.52,364.8,0.3984
+Strict T+60 (0 days tol),9178,1836,15.09,287.9,0.6507
+T+60 ±1 day tolerance,10062,2013,14.63,279.6,0.6659
+T+60 ±3 days tolerance,10257,2052,14.85,283.7,0.6486
+T+60 ±5 days tolerance,10270,2054,15.08,286.4,0.6431

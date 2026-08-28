@@ -1,0 +1,14 @@
+commodity,market,n_train,n_test,mape
+Brinjal,Belagavi,595,149,16.88
+Maize,Davanagere,596,148,12.35
+Maize,Haveri,595,149,8.69
+Marigold,Chikkaballapur,595,149,43.18
+Onion,Dharwad,595,149,24.62
+Onion,Kolar,595,149,24.17
+Potato,Kolar,595,149,21.11
+Potato,Mysuru,595,149,25.81
+Ragi,Mandya,595,149,9.12
+Ragi,Tumakuru,596,148,7.71
+Tomato,Belagavi,595,149,22.69
+Tomato,Chikkaballapur,595,149,32.5
+Tomato,Kolar,595,149,30.96

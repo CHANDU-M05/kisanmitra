@@ -1,0 +1,6 @@
+Experiment,Overall MAPE (%),MAE (Rs),R2 Score,Brinjal,Maize,Marigold,Onion,Potato,Ragi,Tomato
+Exp A: Baseline RF (Shift Target),19.53,365.4,0.3968,15.62,8.59,30.66,28.69,16.15,8.57,27.84
+Exp B: RF + Exact Calendar T+60,15.07,286.2,0.6441,11.66,7.42,26.95,18.38,13.07,7.64,21.42
+Exp C: RF + Calendar T+60 + Festivals,15.0,285.4,0.6473,11.79,7.42,26.79,18.13,13.04,7.75,21.27
+Exp D: HistGBDT + Calendar T+60 + Festivals,14.65,277.8,0.6545,11.97,7.24,26.93,17.86,12.83,7.85,19.98
+Exp E: Grouped GBDT (Storable vs Perishable),14.43,273.8,0.6624,12.22,7.41,26.37,17.74,13.08,7.31,19.29

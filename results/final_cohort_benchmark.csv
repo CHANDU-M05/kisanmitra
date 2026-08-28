@@ -1,0 +1,7 @@
+Model Pipeline,Overall MAPE (%),Error Reduction,MAE (Rs),R2 Score,Brinjal,Maize,Marigold,Onion,Potato,Ragi,Tomato
+M1 — Legacy RF (Shift Target),19.19,Baseline,370.6,0.4029,14.45,8.09,28.59,19.91,14.02,7.87,35.53
+M2 — Calendar-Aligned RF,14.62,+23.8%,279.6,0.6622,11.95,7.47,25.48,15.83,12.14,7.91,21.97
+M3 — Calendar + Festival RF,14.59,+24.0%,279.1,0.6636,12.13,7.42,25.35,15.73,12.14,8.0,21.86
+M4 — Calendar + Festival HistGBDT,14.37,+25.1%,274.1,0.676,12.43,7.51,26.51,15.62,12.0,8.04,20.48
+M5 — Calendar + Festival Grouped GBDT,13.9,+27.6%,268.0,0.6853,12.35,7.61,24.91,15.93,11.81,7.66,19.13
+M6 — Calendar + Festival Grouped GBDT + Saturation,13.9,+27.6%,268.0,0.6853,12.35,7.61,24.91,15.93,11.81,7.66,19.13
