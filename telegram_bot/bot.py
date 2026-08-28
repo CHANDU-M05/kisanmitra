@@ -46,21 +46,19 @@ async def main() -> None:
         default=DefaultBotProperties(parse_mode=ParseMode.MARKDOWN),
     )
 
-    # Share one Redis connection: FSM storage + dedup middleware both use it.
-    # RedisStorage manages its own connection pool internally; we open a
-    # separate lightweight client for the dedup key writes so the two
-    # concerns remain decoupled and won't block each other's key namespaces.
-    redis_client = AsyncRedis.from_url(REDIS_URL, decode_responses=True)
-    storage = RedisStorage.from_url(REDIS_URL)
-    dp      = Dispatcher(storage=storage)
-
-    # ── Idempotency middleware (registered FIRST — outer middleware) ────────────
-    # Runs before routers and filters. Drops duplicate update_ids silently.
-    # Fail-open: if Redis is down, passes through to the DB-level guard.
-    dp.update.outer_middleware(DedupMiddleware(redis_client))
-    # ── Rate limit middleware (registered SECOND) ─────────────────────────────
-    # 15 requests per 60 seconds per user_id. Fail-open on Redis error.
-    dp.update.outer_middleware(RateLimitMiddleware(redis_client))
+    from aiogram.fsm.storage.memory import MemoryStorage
+    try:
+        redis_client = AsyncRedis.from_url(REDIS_URL, decode_responses=True)
+        await redis_client.ping()
+        storage = RedisStorage.from_url(REDIS_URL)
+        dp = Dispatcher(storage=storage)
+        dp.update.outer_middleware(DedupMiddleware(redis_client))
+        dp.update.outer_middleware(RateLimitMiddleware(redis_client))
+        logger.info("FSM Storage: Redis active.")
+    except Exception as re_err:
+        logger.warning(f"Redis unavailable ({re_err}). Falling back to MemoryStorage.")
+        storage = MemoryStorage()
+        dp = Dispatcher(storage=storage)
     # ── Register routers (ORDER MATTERS — freetext registered last) ───────────
     dp.include_router(start.router)
     dp.include_router(price.router)
