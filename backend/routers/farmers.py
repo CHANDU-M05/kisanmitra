@@ -303,3 +303,25 @@ async def verify_declaration(
         raise HTTPException(500, "Database update error.")
     
     return {"success": True, "id": id, "satellite_status": status, "trust_score": d.trust_score}
+
+
+@router.delete("/farmer/declaration/{id}")
+async def delete_declaration(
+    id: int,
+    db: AsyncSession = Depends(get_db),
+    current_user: AdminUser = Depends(get_current_user)
+) -> dict:
+    result = await db.execute(select(CropDeclaration).where(CropDeclaration.id == id))
+    d = result.scalar_one_or_none()
+    if not d:
+        raise HTTPException(404, "Declaration entry not found.")
+
+    await db.delete(d)
+    try:
+        await db.commit()
+    except Exception as exc:
+        await db.rollback()
+        raise HTTPException(500, f"Database deletion error: {exc}")
+
+    return {"success": True, "id": id, "message": "Declaration deleted successfully from database."}
+

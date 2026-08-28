@@ -1,6 +1,6 @@
 // src/pages/FarmersView.jsx
 import React, { useState, useEffect } from 'react';
-import { Users, Filter, CheckCircle2, AlertCircle, RefreshCw, Download, ChevronDown, ChevronRight } from 'lucide-react';
+import { Users, Filter, CheckCircle2, AlertCircle, RefreshCw, Download, ChevronDown, ChevronRight, Trash2 } from 'lucide-react';
 import { toast } from 'react-hot-toast';
 import Card from '../components/ui/Card';
 import { API } from '../config';
@@ -55,6 +55,32 @@ export default function FarmersView() {
   const [revealedPhones, setRevealedPhones] = useState(new Set());
   const [searchQuery, setSearchQuery] = useState('');
   const [expandedFarmers, setExpandedFarmers] = useState(new Set());
+
+  const handleDeleteDeclaration = (id, cropName) => {
+    const confirmed = window.confirm(`Are you sure you want to permanently delete this ${cropName} declaration from the database?`);
+    if (!confirmed) return;
+
+    const token = localStorage.getItem('auth_token');
+    fetch(`${API}/farmer/declaration/${id}`, {
+      method: 'DELETE',
+      headers: { 'Authorization': `Bearer ${token}` }
+    })
+      .then(res => {
+        if (!res.ok) throw new Error("Deletion failed");
+        return res.json();
+      })
+      .then(data => {
+        if (data.success) {
+          toast.success("Declaration deleted from database!");
+          setDeclarations(prev => prev.filter(d => d.id !== id));
+          logAudit('DELETE_DECLARATION', `Declaration ID: ${id}`);
+        }
+      })
+      .catch(err => {
+        console.error("Error deleting declaration", err);
+        toast.error("Could not delete declaration from database.");
+      });
+  };
 
   const toggleRevealPhone = (key) => {
     setRevealedPhones(prev => {
@@ -324,20 +350,27 @@ export default function FarmersView() {
                                       </td>
                                       <td className="p-2 text-center">{getStatusBadge(decl.satellite_status)}</td>
                                       <td className="p-2 text-center">
-                                        {decl.satellite_status === 'pending' || !decl.satellite_status ? (
-                                          <div className="flex items-center justify-center gap-1.5">
-                                            <button onClick={() => handleAudit(decl.id, 'verified')}
-                                              className="bg-emerald-500/10 hover:bg-emerald-500/20 text-emerald-500 border border-emerald-500/30 px-2 py-0.5 rounded text-[8px] font-black uppercase transition-colors">
-                                              Approve
-                                            </button>
-                                            <button onClick={() => handleAudit(decl.id, 'failed')}
-                                              className="bg-red-500/10 hover:bg-red-500/20 text-red-500 border border-red-500/30 px-2 py-0.5 rounded text-[8px] font-black uppercase transition-colors">
-                                              Reject
-                                            </button>
-                                          </div>
-                                        ) : (
-                                          <span className="text-[8px] text-slate-500 dark:text-slate-500 font-bold font-mono uppercase">Audited</span>
-                                        )}
+                                        <div className="flex items-center justify-center gap-1.5">
+                                          {decl.satellite_status === 'pending' || !decl.satellite_status ? (
+                                            <>
+                                              <button onClick={() => handleAudit(decl.id, 'verified')}
+                                                className="bg-emerald-500/10 hover:bg-emerald-500/20 text-emerald-500 border border-emerald-500/30 px-2 py-0.5 rounded text-[8px] font-black uppercase transition-colors">
+                                                Approve
+                                              </button>
+                                              <button onClick={() => handleAudit(decl.id, 'failed')}
+                                                className="bg-red-500/10 hover:bg-red-500/20 text-red-500 border border-red-500/30 px-2 py-0.5 rounded text-[8px] font-black uppercase transition-colors">
+                                                Reject
+                                              </button>
+                                            </>
+                                          ) : (
+                                            <span className="text-[8px] text-slate-500 dark:text-slate-400 font-bold font-mono uppercase">Audited</span>
+                                          )}
+                                          <button onClick={() => handleDeleteDeclaration(decl.id, decl.crop)}
+                                            title="Delete entry from database"
+                                            className="p-1 rounded border border-red-500/30 bg-red-500/10 hover:bg-red-500/20 text-red-500 transition-colors cursor-pointer">
+                                            <Trash2 className="h-3 w-3" />
+                                          </button>
+                                        </div>
                                       </td>
                                     </tr>
                                   ))}

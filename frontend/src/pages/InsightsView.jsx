@@ -184,7 +184,7 @@ export default function InsightsView() {
             <Shield className="h-4.5 w-4.5 text-emerald-500" /> 
             {isAdmin ? 'Overproduction Intervention Radar' : 'Sowing Saturation Index'}
           </h2>
-          <p className="text-xs text-slate-600">
+          <p className="text-xs text-slate-600 dark:text-slate-400">
             {isAdmin 
               ? 'Acreage allocations monitored against critical market saturation thresholds.' 
               : 'ಸೂಕ್ತ ಬಿತ್ತನೆ ಪ್ರಮಾಣ ಸಲಹೆಗಳು ಮತ್ತು ಮಾರುಕಟ್ಟೆ ಸ್ಯಾಚುರೇಶನ್ ಸೂಚ್ಯಂಕ. (Live Kannada crop sowing safety guide)'
@@ -201,7 +201,7 @@ export default function InsightsView() {
             className="bg-white border border-slate-200 px-3 py-1.5 text-xs font-medium text-slate-800 focus:outline-none focus:border-emerald-500 rounded-xl dark:bg-slate-900/60 dark:border-white/10 dark:text-slate-200 w-44"
           />
           <div className="flex items-center gap-2">
-            <span className="text-[10px] font-bold text-slate-600 uppercase tracking-wider">Cycle:</span>
+            <span className="text-[10px] font-bold text-slate-600 dark:text-slate-400 uppercase tracking-wider">Cycle:</span>
             <select
               value={season}
               onChange={(e) => setSeason(e.target.value)}

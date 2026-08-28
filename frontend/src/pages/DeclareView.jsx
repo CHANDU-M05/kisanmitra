@@ -109,7 +109,7 @@ export default function DeclareView() {
           <h2 className="text-sm font-bold uppercase tracking-wider flex items-center gap-2 text-slate-950 dark:text-white">
             <ClipboardCheck className="h-4.5 w-4.5 text-emerald-500" /> {t('declare.title')}
           </h2>
-          <p className="text-xs text-slate-600">
+          <p className="text-xs text-slate-600 dark:text-slate-400">
             {t('declare.subtitle')}
           </p>
         </div>
@@ -129,7 +129,7 @@ export default function DeclareView() {
 
             {/* Farmer Name */}
             <div className="space-y-1.5">
-              <label className="text-[10px] font-bold text-slate-700 uppercase tracking-wider block">{t('declare.farmerName')}</label>
+              <label className="text-[10px] font-bold text-slate-700 dark:text-slate-400 uppercase tracking-wider block">{t('declare.farmerName')}</label>
               <input
                 type="text"
                 name="farmerName"
@@ -143,7 +143,7 @@ export default function DeclareView() {
 
             {/* Phone */}
             <div className="space-y-1.5">
-              <label className="text-[10px] font-bold text-slate-700 uppercase tracking-wider block">{t('declare.phone')}</label>
+              <label className="text-[10px] font-bold text-slate-700 dark:text-slate-400 uppercase tracking-wider block">{t('declare.phone')}</label>
               <input
                 type="text"
                 name="phone"
@@ -157,7 +157,7 @@ export default function DeclareView() {
 
             {/* Village */}
             <div className="space-y-1.5">
-              <label className="text-[10px] font-bold text-slate-700 uppercase tracking-wider block">Village</label>
+              <label className="text-[10px] font-bold text-slate-700 dark:text-slate-400 uppercase tracking-wider block">Village</label>
               <input
                 type="text"
                 name="village"
@@ -172,7 +172,7 @@ export default function DeclareView() {
             {/* District & Crop selects row */}
             <div className="grid grid-cols-2 gap-4">
               <div className="space-y-1.5">
-                <label className="text-[10px] font-bold text-slate-700 uppercase tracking-wider block">{t('declare.district')}</label>
+                <label className="text-[10px] font-bold text-slate-700 dark:text-slate-400 uppercase tracking-wider block">{t('declare.district')}</label>
                 <select
                   name="district"
                   value={form.district}
@@ -186,7 +186,7 @@ export default function DeclareView() {
               </div>
 
               <div className="space-y-1.5">
-                <label className="text-[10px] font-bold text-slate-700 uppercase tracking-wider block">{t('declare.crop')}</label>
+                <label className="text-[10px] font-bold text-slate-700 dark:text-slate-400 uppercase tracking-wider block">{t('declare.crop')}</label>
                 <select
                   name="crop"
                   value={form.crop}
@@ -203,7 +203,7 @@ export default function DeclareView() {
             {/* Acreage & Season row */}
             <div className="grid grid-cols-2 gap-4">
               <div className="space-y-1.5">
-                <label className="text-[10px] font-bold text-slate-700 uppercase tracking-wider block">{t('declare.area')}</label>
+                <label className="text-[10px] font-bold text-slate-700 dark:text-slate-400 uppercase tracking-wider block">{t('declare.area')}</label>
                 <input
                   type="number"
                   step="0.1"
@@ -217,7 +217,7 @@ export default function DeclareView() {
               </div>
 
               <div className="space-y-1.5">
-                <label className="text-[10px] font-bold text-slate-700 uppercase tracking-wider block">Season</label>
+                <label className="text-[10px] font-bold text-slate-700 dark:text-slate-400 uppercase tracking-wider block">Season</label>
                 <select
                   name="season"
                   value={form.season}

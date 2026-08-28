@@ -347,7 +347,7 @@ export default function TerminalView() {
       <Card className="flex flex-col md:flex-row justify-between items-start md:items-center gap-4">
         <div className="flex flex-col sm:flex-row items-start sm:items-center gap-4 flex-1">
           <div className="flex items-center gap-2">
-            <span className="text-[10px] font-bold text-slate-700 uppercase tracking-widest">Crop:</span>
+            <span className="text-[10px] font-bold text-slate-700 dark:text-slate-400 uppercase tracking-widest">Crop:</span>
             <select value={selectedCrop} onChange={(e) => setSelectedCrop(e.target.value)}
               className="bg-white border border-slate-200 px-3 py-1.5 text-xs font-bold text-slate-800 focus:outline-none focus:border-emerald-500 rounded-xl cursor-pointer dark:bg-slate-900/60 dark:border-white/10 dark:text-slate-200">
               {cropsList.map(c => <option key={c} value={c}>{c.toUpperCase()}</option>)}
@@ -355,7 +355,7 @@ export default function TerminalView() {
           </div>
 
           <div className="flex items-center gap-2">
-            <span className="text-[10px] font-bold text-slate-700 uppercase tracking-widest">Market:</span>
+            <span className="text-[10px] font-bold text-slate-700 dark:text-slate-400 uppercase tracking-widest">Market:</span>
             <select value={selectedMarket} onChange={(e) => setSelectedMarket(e.target.value)}
               className="bg-white border border-slate-200 px-3 py-1.5 text-xs font-bold text-slate-800 focus:outline-none focus:border-emerald-500 rounded-xl cursor-pointer dark:bg-slate-900/60 dark:border-white/10 dark:text-slate-200">
               {marketsList.map(m => <option key={m} value={m}>{m}</option>)}
@@ -570,11 +570,11 @@ export default function TerminalView() {
 
           <div className="grid grid-cols-2 divide-x divide-slate-200 dark:divide-white/5 font-mono mb-4">
             <div className="pr-5 flex flex-col">
-              <span className="text-[10px] font-bold text-slate-600 dark:text-slate-500 uppercase tracking-widest mb-1">T+60 Projected Spot</span>
+              <span className="text-[10px] font-bold text-slate-600 dark:text-slate-400 uppercase tracking-widest mb-1">T+60 Projected Spot</span>
               <span className="text-2xl font-black text-slate-950 dark:text-white">{formatINR(dynamicT60Price)}</span>
             </div>
             <div className="pl-5 flex flex-col">
-              <span className="text-[10px] font-bold text-slate-600 dark:text-slate-500 uppercase tracking-widest mb-1">Net Structural Shift</span>
+              <span className="text-[10px] font-bold text-slate-600 dark:text-slate-400 uppercase tracking-widest mb-1">Net Structural Shift</span>
               <span className={`text-2xl font-black ${dynamicNetShift < 0 ? 'text-red-500' : 'text-emerald-500'}`}>
                 {dynamicNetShift > 0 ? '+' : ''}{formatINR(dynamicNetShift)}
               </span>
@@ -582,7 +582,7 @@ export default function TerminalView() {
           </div>
 
           <div className="border-t border-slate-100 dark:border-white/5 pt-3 mb-3">
-            <span className="text-[10px] font-bold text-slate-500 uppercase tracking-widest block mb-1">15–85th Percentile Band</span>
+            <span className="text-[10px] font-bold text-slate-500 dark:text-slate-400 uppercase tracking-widest block mb-1">15–85th Percentile Band</span>
             <div className="flex items-center gap-2 font-mono">
               <span className="text-sm font-bold text-slate-700 dark:text-slate-300">{formatINR(confidenceLow)}</span>
               <div className="flex-1 h-1.5 rounded-full bg-slate-100 dark:bg-white/10 relative">
@@ -596,7 +596,7 @@ export default function TerminalView() {
               no second copy of the 15/25 MAPE thresholds to fall out of sync. */}
           {cropMeta.crop_mape_pct !== null && (
             <div className="flex items-center justify-between">
-              <span className="text-[10px] font-bold text-slate-500 uppercase tracking-widest">Model Accuracy ({selectedCrop})</span>
+              <span className="text-[10px] font-bold text-slate-500 dark:text-slate-400 uppercase tracking-widest">Model Accuracy ({selectedCrop})</span>
               <span className={`text-[10px] font-black px-2 py-0.5 rounded border font-mono ${theme.badge}`}>
                 {cropMeta.crop_mape_pct.toFixed(1)}% MAPE · {getReliabilityLabel(cropMeta.crop_mape_pct)}
               </span>
@@ -605,7 +605,7 @@ export default function TerminalView() {
 
           {cropMeta.msp_floor !== null && (
             <div className="mt-2 flex items-center justify-between border-t border-slate-100 dark:border-white/5 pt-2">
-              <span className="text-[10px] font-bold text-slate-500 uppercase tracking-widest">MSP Floor (2025-26)</span>
+              <span className="text-[10px] font-bold text-slate-500 dark:text-slate-400 uppercase tracking-widest">MSP Floor (2025-26)</span>
               <div className="flex items-center gap-1.5 font-mono">
                 <span className="text-[10px] font-bold text-slate-700 dark:text-slate-300">{formatINR(cropMeta.msp_floor)}</span>
                 {cropMeta.msp_ratio !== null && (
