@@ -62,6 +62,15 @@ def get_offline_fallback(query: str, crop: str | None) -> tuple[str, str]:
     if is_kn:
         suffix = "🌾 (ಆಫ್‌ಲೈನ್ ಸಲಹೆ)"
 
+        # 0. Crop Rotation & Soil Nitrogen Restoration (Kannada)
+        if any(kw in q for kw in ["ಪರಿವರ್ತನೆ", "ಸಾರಜನಕ", "ಕಡಲೆಕಾಯಿ", "rotation", "rotate", "nitrogen"]):
+            return (
+                "📋 **ಮೆಕ್ಕೆಜೋಳ ನಂತರ ಬೆಳೆ ಪರಿವರ್ತನೆ ಮತ್ತು ಸಾರಜನಕ ನಿರ್ವಹಣೆ (Crop Rotation & Soil Nitrogen Restoration)**:\n"
+                "• **ವಿಷಯ**: ಮೆಕ್ಕೆಜೋಳದಂತಹ ಧಾನ್ಯಗಳ ನಂತರ ದ್ವಿದಳ ಧಾನ್ಯಗಳನ್ನು (ಕಡಲೆಕಾಯಿ/ಅಲಸಂದಿ) ಬೆಳೆಯುವುದರಿಂದ ಮಣ್ಣಿನಲ್ಲಿ ಸಾರಜನಕ (Nitrogen) ಪ್ರಮಾಣ ನೈಸರ್ಗಿಕವಾಗಿ ಹೆಚ್ಚಾಗುತ್ತದೆ.\n"
+                "• **ಕ್ರಮಗಳು**: ಮೆಕ್ಕೆಜೋಳ ಕಟಾವಿನ ನಂತರ ಕಡಲೆಕಾಯಿ (Groundnut) ಬೆಳೆಯಿರಿ. ಇವುಗಳ ಬೇರುಗಳಲ್ಲಿರುವ ರೈಜೋಬಿಯಂ ಬ್ಯಾಕ್ಟೀರಿಯಾಗಳು ಎಕರೆಗೆ 15-25 ಕೆಜಿ ಸಾರಜನಕವನ್ನು ಮಣ್ಣಿಗೆ ಒದಗಿಸುತ್ತವೆ.\n"
+                "• **ಟಿಪ್**: ಬಿತ್ತನೆಗೆ ಮುನ್ನ ಬೀಜಕ್ಕೆ 200 ಗ್ರಾಂ ರೈಜೋಬಿಯಂ ಜೈವಿಕ ಗೊಬ್ಬರವನ್ನು ಲೇಪಿಸಿ ಬಿತ್ತನೆ ಮಾಡಿ.", suffix
+            )
+
         # 1. Stem Rot & Thundu Roga (Potato/Tomato)
         if any(kw in q for kw in ["thundu", "stem rot", "thundu roga", "ಕಾಂಡ ಕೊಳೆ"]):
             return (
@@ -164,12 +173,13 @@ def get_offline_fallback(query: str, crop: str | None) -> tuple[str, str]:
             ), suffix
 
         # 0d. Tomato & Marigold Trap Crop Intercropping
-        if any(kw in q for kw in ["marigold", "trap crop"]) or ("intercrop" in q and ("tomato" in q or "nematode" in q)):
+        if any(kw in q for kw in ["marigold", "trap crop"]) or ("intercrop" in q and ("tomato" in q or "borer" in q or "nematode" in q)):
             return (
-                "📋 **Tomato & Marigold Trap Crop Intercropping**:\n"
-                "• **Overview**: Planting Marigold (*Tagetes erecta*) as a border/trap crop with Tomato deters Fruit Borer (*Helicoverpa armigera*) and Root-Knot Nematodes.\n"
-                "• **Actionable Steps**: Plant 1 row of Marigold for every 10–12 rows of Tomato. Marigold flowers trap adult moths away from tomato fruits, while root alpha-terthienyl suppresses nematodes.\n"
-                "• **Cautions**: Sow Marigold seeds 15 days prior to tomato transplanting so flowering coincides with tomato fruit set."
+                "📋 **Tomato & Marigold Trap Crop Intercropping (Fruit Borer & Nematode Control)**:\n"
+                "• **Overview**: Intercropping Marigold (*Tagetes erecta*) with Tomato controls BOTH Fruit Borer (*Helicoverpa armigera*) and Root-Knot Nematodes (*Meloidogyne*).\n"
+                "• **Fruit Borer Action**: Marigold flowers attract adult *Helicoverpa* moths away from Tomato to lay eggs on marigold buds, where larvae can be selectively sprayed with Bt (2g/L).\n"
+                "• **Nematode Action**: Marigold roots release alpha-terthienyl compounds that naturally eliminate root-knot nematodes in the soil.\n"
+                "• **Planting Pattern**: Plant 1 row of Marigold for every 10–12 rows of Tomato (or 1 marigold plant every 16 tomato plants)."
             ), suffix
 
         # 0e. Cabbage NPK Basal & Fertigation Schedule

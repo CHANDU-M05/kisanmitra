@@ -39,6 +39,7 @@ CANONICAL_CROPS: dict[str, str] = {
     "ragi":      "Ragi",
     "brinjal":   "Brinjal",
     "cabbage":   "Cabbage",
+    "groundnut": "Groundnut",
 }
 
 CANONICAL_DISTRICTS: dict[str, str] = {
@@ -77,11 +78,13 @@ _CROP_ALIASES: dict[str, str] = {
     # Capsicum
     "ಕ್ಯಾಪ್ಸಿಕಂ": "capsicum", "capsicum": "capsicum",
     "donne menasu": "capsicum",
-    # Maize, Ragi, Brinjal, Cabbage
+    # Maize, Ragi, Brinjal, Cabbage, Groundnut
     "ಮೆಕ್ಕೆಜೋಳ": "maize", "ಮುಸುಕಿನಜೋಳ": "maize",
     "ರಾಗಿ": "ragi", 
     "ಬದನೆಕಾಯಿ": "brinjal", "ಬದನೆ": "brinjal",
     "ಎಲೆಕೋಸು": "cabbage",
+    "groundnut": "groundnut", "groundnuts": "groundnut", "peanut": "groundnut", "peanuts": "groundnut",
+    "ಕಡಲೆಕಾಯಿ": "groundnut", "ನೆಲಗಡಲೆ": "groundnut", "kadalekayi": "groundnut", "nelagadale": "groundnut",
 }
 
 _DISTRICT_ALIASES: dict[str, str] = {
@@ -189,7 +192,7 @@ class Intent(Enum):
 
 # Keywords that MUST bypass the LLM (G2)
 _PRICE_KEYWORDS = [
-    "ಬೆಲೆ", "ಬೆಲ", "price", "rate", "mandi", "ಮಂಡಿ", "ಧರ", "ಧಾರಣೆ", "forecast", "60 day", "projected", "yeshtu", "eshtu", " ivattu", " today"
+    "ಬೆಲೆ", "ಬೆಲ", "price", "rate", "mandi", "ಮಂಡಿ", "ಧರ", "ಧಾರಣೆ", "forecast", "60 day", "60-day", "projected"
 ]
 _SATURATION_KEYWORDS = [
     "saturation", "ಸ್ಯಾಚುರೇಷನ್", "risk", "ಅಪಾಯ", "ಎಷ್ಟು ಎಕರೆ", "ಎಷ್ಟು ರೈತರು", "ಇಗಾಗಲೇ ಬಿತ್ತನೆ", "ಇಾಗಲೇ ಬಿತ್ತನೆ",
@@ -240,9 +243,13 @@ def parse(text: str) -> ParsedMessage:
     district = resolve_district(text)
     area     = extract_area(text)
 
-    # 1. Pure Smalltalk / Greetings / Unrelated conversation -> UNKNOWN -> Help Menu
-    _SMALLTALK_TERMS = ["namaskara", "hegideera", "cricket", "weather", "bombat", "hello", "hi", "hey", "good morning", "good evening", "thanks", "thank you", "what can you do", "help"]
-    is_smalltalk = any(term in tl for term in _SMALLTALK_TERMS) and not any(kw in tl for kw in ["price", "rate", "bela", "mandi", "disease", "rot", "spray", "acre", "sowed", "planted", "hakidini"])
+    # 1. Pure Smalltalk / Greetings / Capability inquiries -> UNKNOWN -> Help Menu
+    _SMALLTALK_TERMS = [
+        "namaskara", "hegideera", "cricket", "weather", "bombat", "hello", "hi", "hey",
+        "good morning", "good evening", "thanks", "thank you", "what can you do", "helping farmers",
+        "how is kisanmitra", "about kisanmitra", "who are you", "how are you"
+    ]
+    is_smalltalk = any(term in tl for term in _SMALLTALK_TERMS) and not any(kw in tl for kw in ["disease", "rot", "spray", "gobbara", "fertilizer", "acre", "sowed", "planted", "hakidini"])
     if is_smalltalk or (not crop and not district and not any(kw in tl for kw in _PRICE_KEYWORDS + _SATURATION_KEYWORDS + _AGRONOMY_KEYWORDS)):
         return ParsedMessage(
             intent   = Intent.UNKNOWN,
@@ -262,23 +269,23 @@ def parse(text: str) -> ParsedMessage:
             raw_text = text,
         )
 
-    # 3. Price query check MUST take priority if explicit price/mandi keywords exist
-    if any(kw in tl for kw in _PRICE_KEYWORDS):
-        return ParsedMessage(
-            intent   = Intent.PRICE_QUERY,
-            crop     = crop,
-            district = district,
-            area     = None,
-            raw_text = text,
-        )
-
-    # 4. Sowing declaration check: requires crop + explicit declaration verb + explicit acreage number!
+    # 3. Sowing declaration check: requires crop + explicit acreage number + explicit declaration verb!
     if crop and area is not None and any(kw in tl for kw in _DECLARE_KEYWORDS):
         return ParsedMessage(
             intent   = Intent.DECLARE_CROP,
             crop     = crop,
             district = district,
             area     = area,
+            raw_text = text,
+        )
+
+    # 4. Price query check MUST take priority if explicit price/mandi keywords exist
+    if any(kw in tl for kw in _PRICE_KEYWORDS):
+        return ParsedMessage(
+            intent   = Intent.PRICE_QUERY,
+            crop     = crop,
+            district = district,
+            area     = None,
             raw_text = text,
         )
 
