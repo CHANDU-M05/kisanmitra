@@ -30,21 +30,17 @@ if settings.gemini_api_key and settings.gemini_api_key.get_secret_value() != "fi
             google_api_key=settings.gemini_api_key.get_secret_value(),
         )
         
-        # Primary: Gemini 1.5 Pro for advanced reasoning. Secondary: Gemini 1.5 Flash fallback.
+        # Primary: Gemini 2.5 Flash for fast, robust generative advisory.
         try:
             _llm = ChatGoogleGenerativeAI(
-                model="gemini-1.5-pro", 
+                model="gemini-2.5-flash", 
                 google_api_key=settings.gemini_api_key.get_secret_value(), 
                 temperature=0.1
             )
-            logger.info("RAG: Initialized Gemini 1.5 Pro LLM.")
+            logger.info("RAG: Initialized Gemini 2.5 Flash LLM.")
         except Exception as pro_ex:
-            logger.warning(f"RAG: Failed to load gemini-1.5-pro, falling back to gemini-1.5-flash: {pro_ex}")
-            _llm = ChatGoogleGenerativeAI(
-                model="gemini-1.5-flash", 
-                google_api_key=settings.gemini_api_key.get_secret_value(), 
-                temperature=0.1
-            )
+            logger.warning(f"RAG: Failed to load gemini-2.5-flash: {pro_ex}")
+            _llm = None
     except Exception as e:
         logger.error(f"Failed to initialize Gemini components: {e}")
 
