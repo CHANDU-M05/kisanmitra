@@ -362,6 +362,14 @@ async def embed_text(text: str) -> list[float] | None:
 
 
 _ADVISORY_CACHE: dict[str, str] = {}
+_MAX_ADVISORY_CACHE_SIZE = 2000
+
+def _set_advisory_cache(key: str, value: str) -> None:
+    if len(_ADVISORY_CACHE) >= _MAX_ADVISORY_CACHE_SIZE:
+        # Evict oldest entry (FIFO)
+        first_key = next(iter(_ADVISORY_CACHE))
+        _ADVISORY_CACHE.pop(first_key, None)
+    _ADVISORY_CACHE[key] = value
 
 async def get_agronomy_advice(query: str, db: AsyncSession, crop: str | None = None, phone_number: str | None = None) -> str:
     """
@@ -447,12 +455,12 @@ async def get_agronomy_advice(query: str, db: AsyncSession, crop: str | None = N
         if not answer:
             fallback_msg, suffix = get_offline_fallback(query, crop)
             final_res = f"{fallback_msg}\n\n— KisanMitra {suffix}"
-            _ADVISORY_CACHE[cache_key] = final_res
+            _set_advisory_cache(cache_key, final_res)
             return final_res
 
         clean_ans = answer.replace("— KisanMitra 🌾", "").replace("— ಕಿಸಾನ್‌ಮಿತ್ರ 🌾", "").strip()
         final_res = f"{clean_ans}\n\n— KisanMitra 🌾"
-        _ADVISORY_CACHE[cache_key] = final_res
+        _set_advisory_cache(cache_key, final_res)
         return final_res
 
     except Exception as exc:

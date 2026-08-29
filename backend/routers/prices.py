@@ -93,8 +93,12 @@ async def price_history(
     )
     rows = result.all()
     if rows:
-        return [{"date": r.arrival_date.date().isoformat(), "price": r.modal_price} for r in rows]
-    return ml_service.generate_sample_history(market, commodity, days)
+        return [{"date": r.arrival_date.date().isoformat(), "price": r.modal_price, "is_synthetic": False} for r in rows]
+    
+    synthetic_data = ml_service.generate_sample_history(market, commodity, days)
+    for item in synthetic_data:
+        item["is_synthetic"] = True
+    return synthetic_data
 
 @router.get("/latest-watch")
 async def latest_prices(db: AsyncSession = Depends(get_db)) -> list[dict]:
@@ -127,6 +131,7 @@ async def latest_prices(db: AsyncSession = Depends(get_db)) -> list[dict]:
                 "price": latest_price,
                 "delta": delta,
                 "state": "BULLISH" if delta > 0 else ("CRASH_RISK" if delta < 0 else "STABLE"),
+                "is_synthetic": False,
             })
         else:
             # Fallback for empty DB — realistic reference prices from Karnataka mandis
@@ -140,6 +145,7 @@ async def latest_prices(db: AsyncSession = Depends(get_db)) -> list[dict]:
                 "price": base_prices.get(crop, 2000),
                 "delta": 0.0,
                 "state": "STABLE",
+                "is_synthetic": True,
             })
 
     return results

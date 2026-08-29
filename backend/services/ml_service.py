@@ -118,6 +118,18 @@ def generate_sample_history(market: str, commodity: str, days: int) -> list[dict
     ]
 
 
+def get_season_label(month: int) -> str:
+    """Map month (1-12) to season label matching training time encoder."""
+    if month in (12, 1, 2):
+        return "Winter"
+    elif month in (3, 4, 5):
+        return "Summer"
+    elif month in (6, 7, 8, 9):
+        return "Monsoon"
+    else:
+        return "Post-Monsoon"
+
+
 async def build_features(
     current_price: float,
     arrivals: float,
@@ -197,28 +209,50 @@ async def build_features(
         price_momentum_7d    = 0.03
         price_volatility_30d = 0.0
 
-    season = 0 if month in [6,7,8,9,10,11] else (1 if month in [12,1,2,3] else 2)
+    season_label = get_season_label(month)
+    season_encoded = 0.0
+    if ENCODERS and "season" in ENCODERS and hasattr(ENCODERS["season"], "classes_"):
+        if season_label in ENCODERS["season"].classes_:
+            season_encoded = float(ENCODERS["season"].transform([season_label])[0])
+
+    days_since_last_report = 0.0
+    if db is not None and commodity and market:
+        last_date_res = await db.execute(
+            select(MandiPrice.arrival_date)
+            .where(
+                MandiPrice.commodity.ilike(commodity),
+                MandiPrice.market.ilike(market),
+            )
+            .order_by(MandiPrice.arrival_date.desc())
+            .limit(1)
+        )
+        last_date = last_date_res.scalar_one_or_none()
+        if last_date:
+            if isinstance(last_date, date):
+                days_since_last_report = float((date.today() - last_date).days)
+            else:
+                days_since_last_report = float((date.today() - last_date.date()).days)
     
-    commodity_encoded = 0
-    market_encoded = 0
+    commodity_encoded = 0.0
+    market_encoded = 0.0
     if ENCODERS:
         try:
-            # Handle unknown labels by assigning 0 or transforming if seen
-            if commodity in ENCODERS["commodity"].classes_:
-                commodity_encoded = ENCODERS["commodity"].transform([commodity])[0]
-            if market in ENCODERS["market"].classes_:
-                market_encoded = ENCODERS["market"].transform([market])[0]
+            if "commodity" in ENCODERS and commodity in ENCODERS["commodity"].classes_:
+                commodity_encoded = float(ENCODERS["commodity"].transform([commodity])[0])
+            if "market" in ENCODERS and market in ENCODERS["market"].classes_:
+                market_encoded = float(ENCODERS["market"].transform([market])[0])
         except Exception:
             pass
 
     values: dict[str, float] = {
-        "commodity_encoded": float(commodity_encoded),
-        "market_encoded":  float(market_encoded),
-        "month":           month,
+        "commodity_encoded": commodity_encoded,
+        "market_encoded":  market_encoded,
+        "month":           float(month),
         "month_sin":       float(np.sin(2 * np.pi * month / 12)),
         "month_cos":       float(np.cos(2 * np.pi * month / 12)),
-        "season":          season,
-        "quarter":         (month - 1) // 3 + 1,
+        "season_encoded":  season_encoded,
+        "season":          season_encoded,
+        "quarter":         float((month - 1) // 3 + 1),
         "modal_price":     current_price,
         "price_7d_avg":    price_7d_avg,
         "price_30d_avg":   price_30d_avg,
@@ -231,6 +265,7 @@ async def build_features(
         "arrivals_7d_avg": arrivals_7d_avg,
         "price_momentum_7d": price_momentum_7d,
         "price_volatility_30d": price_volatility_30d,
+        "days_since_last_report": days_since_last_report,
     }
     row = {f: values.get(f, 0.0) for f in FEATURES}
     return pd.DataFrame([row])[FEATURES]
