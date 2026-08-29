@@ -42,6 +42,8 @@ class Settings(BaseSettings):
     app_env: str = "development"
     app_port: int = 8000
     secret_key: str = "REDACTED_IN_HISTORY"
+    cors_origins: str = "*"
+
 
 
 import logging

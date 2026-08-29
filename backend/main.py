@@ -54,9 +54,16 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
+from backend.core.config import settings
+
+origins = [o.strip() for o in settings.cors_origins.split(",") if o.strip()]
+if settings.app_env == "production" and "*" in origins:
+    logger.warning("⚠️ CORS allow_origins is wildcard '*' in production! Consider restricting ALLOWED_ORIGINS.")
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=origins if origins else ["*"],
+    allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
