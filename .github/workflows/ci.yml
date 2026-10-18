@@ -1,0 +1,158 @@
+name: Continuous Integration
+
+on:
+  pull_request:
+    branches: [main]
+  workflow_call:
+
+permissions:
+  contents: read
+
+env:
+  PYTHON_VERSION: "3.12"
+  NODE_VERSION: "20"
+
+jobs:
+  secret-scan:
+    name: Secret scan
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: gitleaks/gitleaks-action@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  backend:
+    name: Backend lint, test, audit
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    services:
+      postgres:
+        image: pgvector/pgvector:pg16
+        env:
+          POSTGRES_USER: kisanmitra
+          POSTGRES_PASSWORD: ci_password
+          POSTGRES_DB: kisanmitra_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U kisanmitra -d kisanmitra_test"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 12
+      redis:
+        image: redis:7-alpine
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 12
+    # Backend is run from the repo root (python -m pytest); working-directory is root.
+    # Variable names match Settings class (pydantic-settings reads DB_HOST, DB_PORT, etc.)
+    env:
+      APP_ENV: test
+      SECRET_KEY: ci-only-secret-key-0123456789abcdef0123456789abcdef
+      DB_HOST: localhost
+      DB_PORT: "5432"
+      DB_USER: kisanmitra
+      DB_PASSWORD: ci_password
+      DB_NAME: kisanmitra_test
+      REDIS_URL: redis://localhost:6379/0
+      CORS_ORIGINS: "http://localhost:3000"
+      REFRESH_ENABLED: "false"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+          cache-dependency-path: requirements.txt
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install pytest ruff pip-audit
+      - name: Enable pgvector extension
+        env:
+          PGPASSWORD: ci_password
+        run: psql -h localhost -U kisanmitra -d kisanmitra_test -c "CREATE EXTENSION IF NOT EXISTS vector;"
+      - name: Lint — syntax errors and undefined names (critical only)
+        run: ruff check backend/ --select E9,F63,F7,F82
+      - name: Run test suite
+        run: pytest -q
+      - name: Dependency vulnerability audit (advisory)
+        continue-on-error: true
+        run: pip-audit -r requirements.txt
+
+  frontend:
+    name: Frontend lint and build
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    defaults:
+      run:
+        working-directory: frontend
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - run: npm ci
+      - run: npm run lint --if-present
+      - run: npm run build
+        env:
+          # Same-origin API path: built PWA calls /api/* which Caddy proxies
+          # (prefix stripped). Must match frontend/.env.production and the
+          # edge.Dockerfile build arg.
+          VITE_API_URL: "/api"
+      - name: Dependency vulnerability audit (advisory)
+        continue-on-error: true
+        run: npm audit --audit-level=high
+
+  container-images:
+    name: Image build and scan (${{ matrix.image }})
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    needs: [backend, frontend]
+    strategy:
+      fail-fast: false
+      matrix:
+        image: [backend, edge]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v3
+      - name: Build image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: deploy/docker/${{ matrix.image }}.Dockerfile
+          load: true
+          tags: kisanmitra-${{ matrix.image }}:ci
+          cache-from: type=gha,scope=${{ matrix.image }}
+          cache-to: type=gha,mode=max,scope=${{ matrix.image }}
+      - name: Scan image for fixed critical vulnerabilities
+        uses: aquasecurity/trivy-action@0.28.0
+        with:
+          image-ref: kisanmitra-${{ matrix.image }}:ci
+          severity: CRITICAL
+          ignore-unfixed: true
+          exit-code: "1"
+
+  ci-status:
+    name: CI status
+    runs-on: ubuntu-24.04
+    if: always()
+    needs: [secret-scan, backend, frontend, container-images]
+    steps:
+      - name: Fail if any required job failed or was cancelled
+        run: |
+          if [ "${{ contains(needs.*.result, 'failure') || contains(needs.*.result, 'cancelled') }}" = "true" ]; then
+            echo "One or more CI jobs failed or was cancelled"
+            exit 1
+          fi
+          echo "All CI jobs passed"

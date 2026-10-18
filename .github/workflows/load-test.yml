@@ -1,0 +1,133 @@
+name: Load Test
+
+on:
+  schedule:
+    # Every Sunday at 02:00 UTC (07:30 IST) — off-peak for Karnataka farmers
+    - cron: "0 2 * * 0"
+  workflow_dispatch:
+    inputs:
+      users:
+        description: "Peak concurrent users"
+        required: false
+        default: "50"
+      spawn_rate:
+        description: "Users spawned per second"
+        required: false
+        default: "10"
+      duration:
+        description: "Test duration (e.g. 2m)"
+        required: false
+        default: "2m"
+
+permissions:
+  contents: read
+
+env:
+  PYTHON_VERSION: "3.12"
+
+jobs:
+  load-test:
+    name: Locust load test
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    services:
+      postgres:
+        image: pgvector/pgvector:pg16
+        env:
+          POSTGRES_USER: kisanmitra
+          POSTGRES_PASSWORD: ci_password
+          POSTGRES_DB: kisanmitra_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U kisanmitra -d kisanmitra_test"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 12
+      redis:
+        image: redis:7-alpine
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 12
+
+    env:
+      APP_ENV: test
+      SECRET_KEY: ci-only-secret-key-0123456789abcdef0123456789abcdef
+      DB_HOST: localhost
+      DB_PORT: "5432"
+      DB_USER: kisanmitra
+      DB_PASSWORD: ci_password
+      DB_NAME: kisanmitra_test
+      REDIS_URL: redis://localhost:6379/0
+      CORS_ORIGINS: "http://localhost:8000"
+      REFRESH_ENABLED: "false"
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+          cache-dependency-path: requirements.txt
+
+      - name: Install backend and load test dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install "gunicorn>=22.0" "uvicorn[standard]>=0.30" locust
+
+      - name: Enable pgvector extension
+        env:
+          PGPASSWORD: ci_password
+        run: psql -h localhost -U kisanmitra -d kisanmitra_test -c "CREATE EXTENSION IF NOT EXISTS vector;"
+
+      - name: Initialise database schema
+        run: python scripts/00_init_db.py
+
+      - name: Start API server
+        run: |
+          gunicorn backend.main:app \
+            -k uvicorn.workers.UvicornWorker \
+            --bind 0.0.0.0:8000 \
+            --workers 2 \
+            --daemon \
+            --access-logfile /tmp/gunicorn-access.log \
+            --error-logfile /tmp/gunicorn-error.log
+          # Wait until the health endpoint responds
+          for i in $(seq 1 30); do
+            curl -fsS http://localhost:8000/health > /dev/null 2>&1 && break
+            sleep 2
+          done
+          curl -fsS http://localhost:8000/health | python -m json.tool
+
+      - name: Run Locust headless
+        env:
+          LOAD_TEST_HOST: "http://localhost:8000"
+          LOAD_TEST_READ_PATHS: ${{ vars.LOAD_TEST_READ_PATHS || '/health,/prices' }}
+          LOAD_TEST_P95_MS: ${{ vars.LOAD_TEST_P95_MS || '800' }}
+          LOAD_TEST_MAX_FAIL_RATIO: "0.01"
+        run: |
+          locust \
+            --headless \
+            --locustfile tests/load/locustfile.py \
+            --host "${LOAD_TEST_HOST}" \
+            --users "${{ inputs.users || '50' }}" \
+            --spawn-rate "${{ inputs.spawn_rate || '10' }}" \
+            --run-time "${{ inputs.duration || '2m' }}" \
+            --html /tmp/locust-report.html \
+            --csv /tmp/locust-report
+
+      - name: Upload load test report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: load-test-report-${{ github.run_id }}
+          path: |
+            /tmp/locust-report.html
+            /tmp/locust-report_*.csv
+          retention-days: 30
