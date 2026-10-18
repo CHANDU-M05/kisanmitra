@@ -36,6 +36,20 @@ class Settings(BaseSettings):
     #   < postgres max_connections (200 in docker-compose.production.yml)
     db_pool_size: int = 10
     db_max_overflow: int = 20
+    # Serverless Postgres (Neon) suspends an idle compute and can drop idle
+    # connections; recycle pooled connections well before the server would
+    # discard them so a wake-from-idle request re-establishes cleanly.
+    db_pool_recycle: int = 300
+    # libpq SSL mode passed straight to psycopg3. Empty means "not set" so
+    # local development stays as-is; Neon requires SSL, so the Render
+    # blueprint sets DB_SSLMODE=require.
+    db_sslmode: str = ""
+    # Bounded connect retry at startup and in the health probe. The first
+    # connection after Neon scale-to-zero can fail or take several seconds
+    # while the compute resumes; a single attempt would spuriously mark the
+    # whole service unhealthy.
+    db_connect_retries: int = 3
+    db_connect_backoff_seconds: float = 2.0
 
     # Directory holding the cross-process fcntl lock file. In the production
     # compose stack this is a volume shared by both API replicas, so the lock
@@ -59,6 +73,13 @@ class Settings(BaseSettings):
     # into images, so servers bind-mount them and point MODEL_DIR there.
     # Empty means the repository default (<repo>/data/models).
     model_dir: str = ""
+    # Render has an ephemeral filesystem and the models are not baked into the
+    # image, so the operator can point MODEL_URL at a private, freely fetchable
+    # archive (e.g. a GitHub Release asset) holding the three files. MODEL_SHA256
+    # is REQUIRED whenever MODEL_URL is set: an unverified pickle is arbitrary
+    # code execution, so a hash mismatch aborts the load rather than running it.
+    model_url: str = ""
+    model_sha256: str = ""
 
     @property
     def database_url(self) -> str:
@@ -67,6 +88,16 @@ class Settings(BaseSettings):
             f"postgresql+psycopg://{self.db_user}:{self.db_password}"
             f"@{self.db_host}:{self.db_port}/{self.db_name}"
         )
+
+    @property
+    def db_connect_args(self) -> dict:
+        """psycopg3 connect kwargs. SSL mode is the driver-correct libpq
+        parameter (`sslmode`); it is only passed when configured, so local
+        development connects unchanged."""
+        args: dict = {}
+        if self.db_sslmode:
+            args["sslmode"] = self.db_sslmode
+        return args
 
     # ── External Services ─────────────────────────────────
     gemini_api_key: SecretStr = SecretStr("")
