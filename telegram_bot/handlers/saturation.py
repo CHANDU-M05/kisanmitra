@@ -14,6 +14,7 @@ from aiogram.types import CallbackQuery
 from telegram_bot.backend_client import send_to_engine
 from telegram_bot.formatters import format_result
 from telegram_bot.keyboards import crop_keyboard, district_keyboard, result_keyboard
+from telegram_bot.messaging import edit_safe
 from telegram_bot.states import SaturationFlow
 
 router = Router()
@@ -65,9 +66,9 @@ async def sat_district_chosen(cb: CallbackQuery, state: FSMContext) -> None:
         district=district,
     )
 
-    await cb.message.edit_text(
+    await edit_safe(
+        cb.message,
         format_result(result),
-        parse_mode="Markdown",
         reply_markup=result_keyboard(),
     )
     await state.clear()

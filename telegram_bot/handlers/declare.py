@@ -19,6 +19,7 @@ from aiogram.types import CallbackQuery, Message
 from telegram_bot.backend_client import send_to_engine
 from telegram_bot.formatters import format_result
 from telegram_bot.keyboards import crop_keyboard, district_keyboard, main_menu_keyboard
+from telegram_bot.messaging import answer_safe, edit_safe
 from telegram_bot.states import DeclareCropFlow
 
 router = Router()
@@ -108,9 +109,9 @@ async def area_entered(message: Message, state: FSMContext) -> None:
         farmer_name=farmer_name,
     )
 
-    await message.answer(
+    await answer_safe(
+        message,
         format_result(result),
-        parse_mode="Markdown",
         reply_markup=main_menu_keyboard(),
     )
     await state.clear()
@@ -142,9 +143,9 @@ async def confirm_declaration_callback(cb: CallbackQuery) -> None:
         farmer_name=farmer_name,
     )
 
-    await cb.message.edit_text(
+    await edit_safe(
+        cb.message,
         format_result(result),
-        parse_mode="Markdown",
         reply_markup=main_menu_keyboard(),
     )
 

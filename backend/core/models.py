@@ -218,3 +218,40 @@ class AuditLog(Base):
     target         = Column(String, nullable=False)
     ip_address     = Column(String, nullable=True)
     created_at     = Column(DateTime(timezone=True), server_default=func.now(), index=True)
+
+
+class DataRefreshRun(Base):
+    """
+    One row per AGMARKNET refresh attempt — the operational record that lets an
+    operator tell apart three very different situations:
+
+      status='success'      new market rows landed; forecasts are current
+      status='no_new_data'  the fetch worked but the upstream has published
+                            nothing newer than what we already hold
+      status='failed'       fetch/parse/write error — data age is NOT evidence
+                            of an idle market
+
+    Without this distinction a stalled pipeline looks identical to a closed
+    mandi, and the freshness gate would silently blame the farmer's crop.
+    """
+    __tablename__ = "data_refresh_runs"
+
+    id            = Column(Integer, primary_key=True, index=True)
+    started_at    = Column(DateTime(timezone=True), nullable=False, index=True)
+    finished_at   = Column(DateTime(timezone=True))
+    status        = Column(String(20), nullable=False, index=True)
+    trigger       = Column(String(20), nullable=False, default="manual")
+
+    rows_fetched   = Column(Integer, default=0)
+    rows_validated = Column(Integer, default=0)
+    rows_rejected  = Column(Integer, default=0)
+    rows_duplicate = Column(Integer, default=0)
+    rows_inserted  = Column(Integer, default=0)
+
+    # Newest market date known to the DB before and after this run.
+    prev_newest_date = Column(DateTime(timezone=True))
+    new_newest_date  = Column(DateTime(timezone=True))
+
+    error          = Column(Text)
+    details        = Column(JSONB)
+    created_at     = Column(DateTime(timezone=True), server_default=func.now())

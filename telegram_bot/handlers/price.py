@@ -21,6 +21,7 @@ from telegram_bot.keyboards import (
     district_keyboard,
     result_keyboard,
 )
+from telegram_bot.messaging import edit_safe
 from telegram_bot.states import PriceFlow
 
 router = Router()
@@ -73,6 +74,6 @@ async def district_chosen(cb: CallbackQuery, state: FSMContext) -> None:
     text   = format_result(result)
     kb     = anomaly_keyboard() if result.get("type") == "anomaly_flagged" else result_keyboard()
 
-    await cb.message.edit_text(text, parse_mode="Markdown", reply_markup=kb)
+    await edit_safe(cb.message, text, reply_markup=kb)
     await state.clear()
     await cb.answer()

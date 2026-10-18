@@ -5,19 +5,23 @@ Downloads historical APMC mandi records for Karnataka (2003-2023)
 Saves to data/raw/real_karnataka_agmarknet.csv
 """
 
-import os
 import sys
 import time
 import requests
 import pandas as pd
 from pathlib import Path
-from dotenv import load_dotenv
 
 BASE_DIR = Path(__file__).resolve().parents[1]
-load_dotenv(BASE_DIR / "config" / ".env")
+sys.path.insert(0, str(BASE_DIR))
+from backend.core.config import redact_secrets, settings  # noqa: E402
 
-KEY = os.getenv("DATA_GOV_API_KEY", "REDACTED_IN_HISTORY")
-RESOURCE_ID = "35985678-0d79-46b4-9ed6-6f13308a1d24"
+# This script read config/.env, which does not exist — so it always fell through
+# to the hardcoded key below. Credentials now come from the same settings object
+# the API uses, with no default.
+KEY = settings.data_gov_api_key
+if not KEY:
+    raise SystemExit("DATA_GOV_API_KEY is not set in .env — cannot download.")
+RESOURCE_ID = settings.agmarknet_resource_id
 RAW_DIR = BASE_DIR / "data" / "raw"
 RAW_DIR.mkdir(parents=True, exist_ok=True)
 
@@ -85,7 +89,7 @@ def main():
                         print(f"  HTTP {r.status_code} at offset {offset}, retrying ({attempt+1}/{max_retries})...")
                         time.sleep(3)
                 except Exception as e:
-                    print(f"  Request exception at offset {offset}: {e}, retrying ({attempt+1}/{max_retries})...")
+                    print(f"  Request exception at offset {offset}: {redact_secrets(str(e))}, retrying ({attempt+1}/{max_retries})...")
                     time.sleep(3)
 
             if not success or (success and len(data.get("records", [])) == 0):

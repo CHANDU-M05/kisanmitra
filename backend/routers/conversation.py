@@ -156,7 +156,23 @@ async def conversation_message(
     result: dict = {}
 
     try:
-        if parsed.intent == Intent.PRICE_QUERY:
+        # P0 GUARD (B2): A free-text PRICE/SATURATION query that was only
+        # answerable by guessing a default crop/district must ASK instead of
+        # confidently answering about Tomato in Chikkaballapur. Button flows
+        # (body.intent set) always carry explicit entities and skip this.
+        if (parsed.intent in (Intent.PRICE_QUERY, Intent.SATURATION_CHECK)
+                and not body.intent
+                and (crop_used_def or dist_used_def)):
+            missing = [m for m, used in (("crop", crop_used_def), ("district", dist_used_def)) if used]
+            result = {
+                "type":    "clarify",
+                "missing": missing,
+                "intent":  parsed.intent.name,
+                "crop":     None if crop_used_def else crop,
+                "district": None if dist_used_def else district,
+            }
+
+        elif parsed.intent == Intent.PRICE_QUERY:
             result = await _handle_price(crop, district, db)
 
         elif parsed.intent == Intent.DECLARE_CROP:
@@ -177,7 +193,7 @@ async def conversation_message(
             result = await _handle_saturation(crop, district, db, raw_text=body.text)
 
         elif parsed.intent == Intent.AGRONOMY_ADVICE:
-            advice = await get_agronomy_advice(body.text, db, crop=crop, phone_number=body.sender_id)
+            advice = await get_agronomy_advice(body.text, db, crop=crop, phone_number=body.sender_id, district=district)
             result = {"type": "advisory", "text": advice, "crop": crop}
 
         else:
@@ -314,121 +330,10 @@ async def _get_previous_intent(sender_id: str, channel: str, db: AsyncSession) -
 
 # ── Intent sub-handlers ───────────────────────────────────
 
-_DISTRICT_ALIASES: dict[str, list[str]] = {
-    "Tumakuru": ["Tumkur", "Tumakuru"],
-    "Shivamogga": ["Shimoga", "Shivamogga"],
-    "Bengaluru Urban": ["Bangalore", "Bengaluru"],
-    "Bengaluru Rural": ["Bangalore", "Bengaluru"],
-    "Belagavi": ["Belgaum", "Belagavi"],
-    "Mysuru": ["Mysore", "Mysuru"],
-    "Ballari": ["Bellary", "Ballari"],
-    "Vijayapura": ["Bijapur", "Vijayapura"],
-    "Kalaburagi": ["Gulbarga", "Kalaburagi"],
-}
-
 async def _handle_price(crop: str, district: str, db: AsyncSession) -> dict:
-    if ml_service.MODEL is None:
-        return {"type": "error", "detail": "Model not loaded. Run scripts/03_train_model.py first."}
-
-    from sqlalchemy import or_
-
-    c_pattern = f"%{crop.split()[0]}%"
-    d_targets = _DISTRICT_ALIASES.get(district, [district, district[:5]])
-    d_conditions = [MandiPrice.district.ilike(f"%{d}%") for d in d_targets]
-
-    price_row = await db.execute(
-        select(MandiPrice.modal_price)
-        .where(
-            MandiPrice.commodity.ilike(c_pattern),
-            or_(*d_conditions),
-            MandiPrice.modal_price.isnot(None),
-        )
-        .order_by(MandiPrice.arrival_date.desc())
-        .limit(1)
-    )
-    latest = price_row.scalar_one_or_none()
-
-    # Fallback to overall crop price if specific district has no records
-    if latest is None:
-        fb_row = await db.execute(
-            select(MandiPrice.modal_price)
-            .where(
-                MandiPrice.commodity.ilike(c_pattern),
-                MandiPrice.modal_price.isnot(None),
-            )
-            .order_by(MandiPrice.arrival_date.desc())
-            .limit(1)
-        )
-        latest = fb_row.scalar_one_or_none()
-
-    if latest is None:
-        # Standard realistic reference spot prices (Rs/quintal) for Karnataka crops
-        default_spots = {
-            "Cabbage": 1450.0,
-            "Capsicum": 2800.0,
-            "Cowpea": 3200.0,
-            "Grapes": 4500.0,
-            "Green Chilli": 2400.0,
-            "Groundnut": 5600.0,
-            "Lemon": 2800.0,
-            "Mango": 3500.0,
-            "Pomegranate": 6500.0,
-            "Sapota": 2200.0,
-            "Soybean": 4200.0,
-            "Sugarcane": 350.0,
-            "Toor Dal": 7800.0,
-            "Turmeric": 11500.0,
-        }
-        c_title = crop.strip().title()
-        latest = default_spots.get(c_title, 1850.0)
-
-    current_price = float(latest)
-
-    arr_row = await db.execute(
-        select(MandiPrice.arrivals_tonnes)
-        .where(
-            MandiPrice.commodity.ilike(c_pattern),
-            or_(*d_conditions),
-            MandiPrice.arrivals_tonnes.isnot(None),
-        )
-        .order_by(MandiPrice.arrival_date.desc())
-        .limit(1)
-    )
-    arrivals = float(arr_row.scalar_one_or_none() or 100.0)
-
-    X = await ml_service.build_features(
-        current_price, arrivals, date.today().month, crop, district, db
-    )
-    pred_res = ml_service.make_prediction(X, current_price)
-    pred = pred_res["pred"]
-    low  = pred_res["low"]
-    high = pred_res["high"]
-    signal, signal_kn = ml_service.price_signal(pred, current_price)
-    meta = ml_service.crop_prediction_meta(crop, current_price)
-
-    deviation_pct = abs(pred - current_price) / max(current_price, 1) * 100
-    is_anomaly    = deviation_pct > 30.0
-    anomaly_type  = "SPIKE" if pred > current_price else ("CRASH" if pred < current_price else "NORMAL")
-
-    base = {
-        "crop":          crop,
-        "district":      district,
-        "current_price": round(current_price, 0),
-        "forecast":      round(pred, 0),
-        "lower":         round(low, 0),
-        "upper":         round(high, 0),
-        "signal":        signal,
-        "signal_kannada":signal_kn,
-        "is_anomaly":    is_anomaly,
-        "anomaly_type":  anomaly_type,
-        "deviation_pct": round(deviation_pct, 1),
-        "crop_mape_pct": meta["crop_mape_pct"],
-        "msp_floor":     meta["msp_floor"],
-    }
-
-    if is_anomaly:
-        return {"type": "anomaly_flagged", **base}
-    return {"type": "forecast", **base}
+    """Compatibility wrapper around the shared, channel-independent price service."""
+    from backend.services.price_service import get_price_forecast
+    return await get_price_forecast(crop, district, db)
 
 
 async def _handle_declare(

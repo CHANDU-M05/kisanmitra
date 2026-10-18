@@ -27,6 +27,7 @@ from telegram_bot.keyboards import (
     main_menu_keyboard,
     result_keyboard,
 )
+from telegram_bot.messaging import answer_safe
 
 router = Router()
 logger = logging.getLogger("kisanmitra.telegram.freetext")
@@ -69,8 +70,8 @@ async def handle_free_text(message: Message, state: FSMContext) -> None:
         text=text,
     )
 
-    await message.answer(
+    await answer_safe(
+        message,
         format_result(result),
-        parse_mode="Markdown",
         reply_markup=_keyboard_for(result),
     )

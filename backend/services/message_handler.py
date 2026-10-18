@@ -163,11 +163,61 @@ _DISTRICT_CORPUS = list(_DISTRICT_ALIASES.keys()) + list(CANONICAL_DISTRICTS.key
 
 _FUZZY_THRESHOLD = 75   # minimum score (0-100) to accept a fuzzy match
 
+# Cross-language surface words used to guard the fuzzy fallback:
+# district names must never fuzzy-resolve as crops ('kalaburagi' ⊃ 'ragi')
+# and crop names must never fuzzy-resolve as districts.
+_DISTRICT_SURFACE_WORDS = sorted(
+    set(CANONICAL_DISTRICTS) | {a for a in _DISTRICT_ALIASES if a.isascii()},
+    key=len, reverse=True,
+)
+_CROP_SURFACE_WORDS = sorted(
+    set(CANONICAL_CROPS) | {a for a in _CROP_ALIASES if a.isascii()},
+    key=len, reverse=True,
+)
+
+
+def _looks_like_other_domain(token: str, surface_words: list[str]) -> bool:
+    """True if the token resembles a known surface word of the OTHER entity domain."""
+    return any(
+        len(word) >= 5 and (word in token or token in word)
+        for word in surface_words
+    )
+
+
+def _fuzzy_match_token(
+    text: str,
+    corpus: list[str],
+    alias_map: dict[str, str],
+    canonical_map: dict[str, str],
+    exclude_words: list[str] | None = None,
+) -> Optional[str]:
+    """
+    GUARDRAIL 1 fallback (wires up the documented thefuzz layer): per-token
+    fuzzy match against the alias corpus. Only reached when every exact
+    alias/canonical match failed, so exact behavior never changes.
+    Handles typos like 'tomatoe' → Tomato or 'Dharwadd' → Dharwad.
+    """
+    for token in re.findall(r"[a-z\u0c80-\u0cff']+", text.lower()):
+        if len(token) < 4:   # skip short function words ("in", "of", …)
+            continue
+        if exclude_words and _looks_like_other_domain(token, exclude_words):
+            continue
+        best = fuzz_process.extractOne(token, corpus, score_cutoff=_FUZZY_THRESHOLD)
+        if not best:
+            continue
+        match_str, score = best[0], best[1]
+        key = alias_map.get(match_str, match_str)
+        canonical = canonical_map.get(key)
+        if canonical:
+            logger.info("Fuzzy fallback: token=%r → %r (score=%d)", token, match_str, score)
+            return canonical
+    return None
+
 
 def resolve_crop(text: str) -> Optional[str]:
     """
     GUARDRAIL 1: Return canonical crop ID or None.
-    Priority: main cash crop position -> word boundary alias match.
+    Priority: main cash crop position -> word boundary alias match -> fuzzy fallback.
     Uses \b word boundary for ASCII terms (e.g. 'ragi' in 'kalaburagi') and
     substring matching for Unicode/Kannada script terms.
     """
@@ -204,7 +254,11 @@ def resolve_crop(text: str) -> Optional[str]:
                 earliest_idx = pos
                 matched_crop = canonical
 
-    return matched_crop
+    if matched_crop:
+        return matched_crop
+    # Typo tolerance: nothing matched exactly — try per-token fuzzy fallback.
+    return _fuzzy_match_token(tl, _CROP_CORPUS, _CROP_ALIASES, CANONICAL_CROPS,
+                              exclude_words=_DISTRICT_SURFACE_WORDS)
 
 
 def resolve_district(text: str) -> Optional[str]:
@@ -213,7 +267,11 @@ def resolve_district(text: str) -> Optional[str]:
     Priority: direct substring alias match -> canonical name match -> fuzzy fallback.
     """
     all_d = resolve_all_districts(text)
-    return all_d[0] if all_d else None
+    if all_d:
+        return all_d[0]
+    # Typo tolerance: nothing matched exactly — try per-token fuzzy fallback.
+    return _fuzzy_match_token(text, _DISTRICT_CORPUS, _DISTRICT_ALIASES, CANONICAL_DISTRICTS,
+                              exclude_words=_CROP_SURFACE_WORDS)
 
 
 def resolve_all_districts(text: str) -> list[str]:

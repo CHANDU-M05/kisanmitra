@@ -6,6 +6,7 @@ pydantic-settings>=2.9.0
 
 # ── Database ───────────────────────────────────────────────
 SQLAlchemy>=2.0.30
+greenlet>=3.0.0                  # required by SQLAlchemy's async engine (optional dep, not auto-installed)
 psycopg[binary]>=3.2.0           # async psycopg3 driver
 geoalchemy2>=0.17.0              # PostGIS geometry types
 pgvector>=0.4.0                  # pgvector Vector type + HNSW index
@@ -35,7 +36,10 @@ httpx>=0.27.0
 # ── Security & Authentication ──────────────────────────────
 python-jose[cryptography]>=3.3.0
 passlib[bcrypt]>=1.7.4
-bcrypt>=4.0.0
+# passlib 1.7.4 is incompatible with bcrypt >= 4.1 (removes __about__ and breaks
+# its version detection → hash() raises "password cannot be longer than 72 bytes").
+# The lockfile and every verified environment use 3.2.2; keep the ceiling.
+bcrypt<4.1
 python-multipart>=0.0.9
 
 # ── Storage & Document Parsing ─────────────────────────────

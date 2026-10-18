@@ -7,6 +7,7 @@ high-fidelity agronomy advice using Gemini 1.5 Pro.
 """
 from __future__ import annotations
 
+import asyncio
 import logging
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -15,7 +16,7 @@ from langchain_core.prompts import ChatPromptTemplate
 from langchain_core.output_parsers import StrOutputParser
 
 from backend.core.config import settings
-from backend.core.models import KnowledgeChunk
+from backend.core.models import KnowledgeChunk, _HAS_PGVECTOR
 
 logger = logging.getLogger("kisanmitra.rag")
 
@@ -371,18 +372,20 @@ def _set_advisory_cache(key: str, value: str) -> None:
         _ADVISORY_CACHE.pop(first_key, None)
     _ADVISORY_CACHE[key] = value
 
-async def get_agronomy_advice(query: str, db: AsyncSession, crop: str | None = None, phone_number: str | None = None) -> str:
+async def get_agronomy_advice(query: str, db: AsyncSession, crop: str | None = None, phone_number: str | None = None, district: str | None = None) -> str:
     """
     Upgraded RAG pipeline for handling agronomy queries with multi-turn session memory context.
     1. Detects query language (English/Kannada).
     2. Embeds the user query and searches PostgreSQL using pgvector.
     3. Retrieves recent conversation history if phone_number is provided.
     4. Prompts Gemini 2.5 Flash with context and dialogue history.
+
+    Caching policy: answers are generated with per-user conversation history,
+    so the cache key is user-scoped AND personalized replies are never cached
+    (a history-conditioned answer must not be served to a later, different turn).
     """
-    cache_key = f"{crop or 'General'}:{query.strip().lower()}"
-    if cache_key in _ADVISORY_CACHE:
-        logger.info("RAG: Returning cached advisory for key=%s", cache_key)
-        return _ADVISORY_CACHE[cache_key]
+    cache_key = f"{phone_number or 'anon'}:{district or 'Any'}:{crop or 'General'}:{query.strip().lower()}"
+    personalized = False
 
     if _llm is None:
         fallback_msg, suffix = get_offline_fallback(query, crop)
@@ -397,16 +400,46 @@ async def get_agronomy_advice(query: str, db: AsyncSession, crop: str | None = N
             if recent_turns:
                 history_formatted = [f"{t['role'].upper()}: {t['content']}" for t in recent_turns]
                 history_str = "\n".join(history_formatted)
+                personalized = True
 
+        if not personalized and cache_key in _ADVISORY_CACHE:
+            logger.info("RAG: Returning cached advisory for key=%s", cache_key)
+            return _ADVISORY_CACHE[cache_key]
+
+        # Retrieve knowledge chunks: true pgvector cosine similarity when the
+        # query can be embedded, keyword-order fallback otherwise. Keeping the
+        # fallback preserves advisory quality when GEMINI_API_KEY / pgvector are absent.
         chunks = []
         try:
-            stmt = select(KnowledgeChunk.content).limit(5)
+            filters = []
             if crop:
-                stmt = stmt.where(KnowledgeChunk.crop.in_([crop, "All", "General"]))
+                filters.append(KnowledgeChunk.crop.in_([crop, "All", "General"]))
+
+            query_vector = None
+            if _HAS_PGVECTOR and _embeddings is not None:
+                try:
+                    # Bound embedding latency so a slow API call can never stall
+                    # the whole advisory pipeline (LLM itself has its own 8s cap).
+                    query_vector = await asyncio.wait_for(embed_text(query), timeout=4.0)
+                except (asyncio.TimeoutError, Exception) as emb_err:
+                    logger.warning(f"RAG: Query embedding failed ({emb_err}); using keyword-order retrieval.")
+
+            if query_vector is not None:
+                # Ranked by cosine distance — served by the HNSW index
+                # ix_knowledge_embedding_hnsw (vector_cosine_ops).
+                stmt = (
+                    select(KnowledgeChunk.content)
+                    .where(KnowledgeChunk.embedding.isnot(None), *filters)
+                    .order_by(KnowledgeChunk.embedding.cosine_distance(query_vector))
+                    .limit(5)
+                )
+            else:
+                stmt = select(KnowledgeChunk.content).where(*filters).limit(5)
+
             result = await db.execute(stmt)
             chunks = result.scalars().all()
         except Exception as db_err:
-            logger.warning(f"Fast SQL context lookup error: {db_err}")
+            logger.warning(f"Context lookup error: {db_err}")
 
         if not chunks:
             context = "No specific local database context found. Supply standard agronomy best practices for Karnataka."
@@ -436,7 +469,6 @@ async def get_agronomy_advice(query: str, db: AsyncSession, crop: str | None = N
         chain = prompt | _llm | StrOutputParser()
         
         # Enforce strict 8.0s timeout boundary on LLM invocation for fast Telegram UX
-        import asyncio
         answer = None
         try:
             answer = await asyncio.wait_for(
@@ -455,12 +487,14 @@ async def get_agronomy_advice(query: str, db: AsyncSession, crop: str | None = N
         if not answer:
             fallback_msg, suffix = get_offline_fallback(query, crop)
             final_res = f"{fallback_msg}\n\n— KisanMitra {suffix}"
-            _set_advisory_cache(cache_key, final_res)
+            if not personalized:
+                _set_advisory_cache(cache_key, final_res)
             return final_res
 
         clean_ans = answer.replace("— KisanMitra 🌾", "").replace("— ಕಿಸಾನ್‌ಮಿತ್ರ 🌾", "").strip()
         final_res = f"{clean_ans}\n\n— KisanMitra 🌾"
-        _set_advisory_cache(cache_key, final_res)
+        if not personalized:
+            _set_advisory_cache(cache_key, final_res)
         return final_res
 
     except Exception as exc:

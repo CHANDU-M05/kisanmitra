@@ -19,6 +19,7 @@ from telegram_bot.backend_client import send_to_engine
 from telegram_bot.config import BACKEND_URL, BACKEND_TIMEOUT
 from telegram_bot.formatters import format_result
 from telegram_bot.keyboards import advisory_followup_keyboard, main_menu_keyboard
+from telegram_bot.messaging import answer_safe
 from telegram_bot.states import AdvisoryFlow
 
 router = Router()
@@ -57,9 +58,9 @@ async def advisory_question_received(message: Message, state: FSMContext) -> Non
     if advisory_msg_id:
         await state.update_data(last_advisory_id=str(advisory_msg_id))
 
-    await message.answer(
+    await answer_safe(
+        message,
         format_result(result),
-        parse_mode="Markdown",
         reply_markup=advisory_followup_keyboard(),
     )
     await state.clear()

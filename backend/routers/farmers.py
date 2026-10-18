@@ -1,11 +1,12 @@
 from fastapi import APIRouter, Depends, Header, HTTPException
 import logging
+import secrets
 import pandas as pd
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from uuid import UUID
-from backend.core.config import settings
+from backend.core.config import settings, using_leaked_secret
 from backend.core.database import get_db
 from backend.core.models import CropDeclaration, AdminUser, ChatHistory
 from backend.routers.auth import get_current_user
@@ -84,7 +85,18 @@ async def farmer_declarations(
     1. X-Internal-Secret MUST match settings.secret_key (prevents direct external queries).
     2. caller_id MUST match phone (prevents cross-user IDOR access).
     """
-    if not x_internal_secret or x_internal_secret != settings.secret_key:
+    if using_leaked_secret():
+        # Fail closed and say why: comparing against a credential that is public
+        # in the repository is not authentication, and comparing against an
+        # empty string would silently reject every legitimate bot call.
+        logger.error(
+            "farmer_declarations refused: SECRET_KEY is unset or is a value this "
+            "repository published. Rotate/define it before serving farmer data."
+        )
+        raise HTTPException(status_code=503, detail="Internal authentication is not configured.")
+
+    if not x_internal_secret or not secrets.compare_digest(
+            x_internal_secret.encode("utf-8"), settings.secret_key.encode("utf-8")):
         logger.warning(
             "Unauthorized client attempt on farmer_declarations: missing/invalid X-Internal-Secret."
         )

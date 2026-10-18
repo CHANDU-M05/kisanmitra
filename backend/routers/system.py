@@ -5,10 +5,11 @@ from fastapi import APIRouter, Depends, BackgroundTasks, UploadFile, File, Form,
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from backend.core.database import get_db
-from backend.core.models import CropDeclaration, MandiPrice, AdminUser, KnowledgeChunk
+from backend.core.config import redact_secrets, settings
+from backend.core.database import AsyncSessionLocal, get_db, engine
+from backend.core.models import CropDeclaration, MandiPrice, AdminUser, DataRefreshRun, KnowledgeChunk
 from backend.routers.auth import get_current_user
-from backend.services import ml_service
+from backend.services import data_refresh, ml_service
 
 router = APIRouter(tags=["system"])
 
@@ -27,18 +28,28 @@ async def health(db: AsyncSession = Depends(get_db)) -> dict:
     db_ok = False
     decl_count = 0
     latest_date_str = None
+    feed_age = None
     try:
         result = await db.execute(select(func.count()).select_from(CropDeclaration))
         decl_count = result.scalar() or 0
         latest_res = await db.execute(select(func.max(MandiPrice.arrival_date)))
         max_date = latest_res.scalar()
-        latest_date_str = max_date.isoformat() if max_date else None
+        if max_date is not None:
+            latest_date_str = max_date.isoformat()
+            # arrival_date is a TIMESTAMPTZ, so compare against "today" in that
+            # same zone — a UTC-vs-IST mismatch shifts the age at day boundaries.
+            max_day = max_date.date() if isinstance(max_date, datetime) else max_date
+            feed_age = (datetime.now(max_date.tzinfo).date() - max_day).days
         db_ok = True
     except Exception:
         db_ok = False
 
     model_ok = ml_service.MODEL is not None
     overall_healthy = db_ok and model_ok
+
+    # Feed age is reported separately from db_ok: a reachable database holding
+    # month-old prices is NOT a healthy forecasting system, and an operator
+    # watching only "database_connected" would miss it.
 
     return {
         "status": "healthy" if overall_healthy else "degraded",
@@ -47,6 +58,10 @@ async def health(db: AsyncSession = Depends(get_db)) -> dict:
         "features": len(ml_service.FEATURES) if model_ok else 0,
         "declarations": decl_count,
         "latest_price_date": latest_date_str,
+        "price_feed_age_days": feed_age,
+        "price_feed_forecastable": (
+            feed_age is not None and feed_age <= settings.price_max_age_days
+        ),
         "timestamp": datetime.now().isoformat(),
     }
 
@@ -71,6 +86,79 @@ async def internal_status(
     }
 
 
+@router.get("/internal/data/status")
+async def data_status(
+    recent: int = 5,
+    db: AsyncSession = Depends(get_db),
+    current_user: AdminUser = Depends(get_current_user),
+) -> dict:
+    """
+    Feed health plus the last refresh attempts — the evidence needed to answer
+    "is the pipeline working?" without reading application logs.
+    """
+    status = await data_refresh.data_freshness(db)
+    runs = (await db.execute(
+        select(DataRefreshRun)
+        .order_by(DataRefreshRun.started_at.desc())
+        .limit(max(1, min(recent, 50)))
+    )).scalars().all()
+
+    status["recent_runs"] = [
+        {
+            "id": r.id,
+            "status": r.status,
+            "trigger": r.trigger,
+            "started_at": r.started_at.isoformat() if r.started_at else None,
+            "rows_fetched": r.rows_fetched,
+            "rows_inserted": r.rows_inserted,
+            "rows_rejected": r.rows_rejected,
+            "rows_duplicate": r.rows_duplicate,
+            # Redacted on the way out as well as on the way in: rows written
+            # before failures were scrubbed still hold the raw upstream URL.
+            "error": redact_secrets(r.error),
+        }
+        for r in runs
+    ]
+    # Consecutive failures are what an alert should fire on: one bad run is
+    # noise, several mean nobody is fixing this.
+    consecutive = 0
+    for r in runs:
+        if r.status == "failed":
+            consecutive += 1
+        else:
+            break
+    status["consecutive_failures"] = consecutive
+    status["refresh_enabled"] = settings.refresh_enabled
+    status["refresh_interval_hours"] = settings.refresh_interval_hours
+    return status
+
+
+@router.post("/internal/data/refresh")
+async def trigger_data_refresh(
+    current_user: AdminUser = Depends(get_current_user),
+) -> dict:
+    """
+    Run one AGMARKNET refresh now. 409 when another worker is already fetching,
+    503 when the API key is missing — a configuration fault is not reported as
+    a transient conflict, because retrying cannot fix it.
+    """
+    if not settings.data_gov_api_key:
+        raise HTTPException(
+            status_code=503,
+            detail="DATA_GOV_API_KEY is not configured; refresh cannot run.",
+        )
+    try:
+        async with data_refresh.refresh_lock(engine):
+            async with AsyncSessionLocal() as db:
+                return await data_refresh.run_refresh(db, trigger="manual")
+    except data_refresh.RefreshAlreadyRunning:
+        raise HTTPException(status_code=409, detail="A refresh is already running.")
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Refresh failed: {e}")
+
+
 @router.post("/internal/sync")
 async def trigger_sync(
     current_user: AdminUser = Depends(get_current_user)
@@ -79,16 +167,28 @@ async def trigger_sync(
     import os
     import asyncio
     import subprocess
+    import tempfile
     from pathlib import Path
     from fastapi import HTTPException
-    
+
     BASE_DIR = Path(__file__).resolve().parents[3]
-    LOCK_FILE = "/tmp/kisanmitra_sync.lock"
-    
-    # Try to acquire a non-blocking exclusive file lock.
-    # This correctly synchronizes across all 4 Uvicorn worker processes.
+
+    # Lock directory comes from configuration so both API containers in the
+    # production stack share one lock volume (/var/lib/kisanmitra/locks).
+    # When that path is unavailable (plain development host) fall back to the
+    # system temp directory, which still synchronises the local worker set.
+    lock_dir = Path(settings.lock_dir)
     try:
-        fd = os.open(LOCK_FILE, os.O_CREAT | os.O_RDWR)
+        lock_dir.mkdir(parents=True, exist_ok=True)
+    except OSError:
+        lock_dir = Path(tempfile.gettempdir())
+    LOCK_FILE = str(lock_dir / "kisanmitra_sync.lock")
+
+    # Try to acquire a non-blocking exclusive file lock.
+    # This correctly synchronizes across all worker processes of every replica
+    # that shares the lock directory.
+    fd = os.open(LOCK_FILE, os.O_CREAT | os.O_RDWR)
+    try:
         fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
     except BlockingIOError:
         os.close(fd)

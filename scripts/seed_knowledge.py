@@ -103,22 +103,24 @@ async def process_and_ingest_bulletin(raw_text: str, source_name: str):
             return
 
         print(f"🧬 Generating embeddings for {len(extracted_data.chunks)} chunks...")
-        texts_to_embed = [chunk.actionable_advice for chunk in extracted_data.chunks]
-        
-        # Pass 2: Batch Embedding Generation (with retry)
-        embedding_response = await call_with_retry(
-            client.aio.models.embed_content,
-            model="gemini-embedding-2",
-            contents=texts_to_embed,
-            output_dimensionality=768
-        )
-        
+        # CRITICAL: embed with the SAME model as query-time retrieval (backend.services.rag.embed_text).
+        # Using a different model here would place ingest vectors in a different semantic
+        # space than query vectors, silently breaking pgvector cosine similarity ranking.
+        from backend.services.rag import embed_text
+
+        vectors: list = []
+        for chunk in extracted_data.chunks:
+            vector = None
+            if _HAS_PGVECTOR:
+                vector = await call_with_retry(embed_text, chunk.actionable_advice)
+            vectors.append(vector)
+
         print("💾 Sinking to KisanMitra Database...")
         async with AsyncSessionLocal() as session:
             async with session.begin():
                 for i, chunk in enumerate(extracted_data.chunks):
-                    vector = embedding_response.embeddings[i].values
-                    
+                    vector = vectors[i]
+
                     stmt = insert(KnowledgeChunk).values(
                         crop=chunk.crop,
                         category=chunk.category,
@@ -126,7 +128,7 @@ async def process_and_ingest_bulletin(raw_text: str, source_name: str):
                         content=chunk.actionable_advice,
                         keywords=chunk.keywords,
                         source=source_name,
-                        embedding=vector if _HAS_PGVECTOR else str(vector)
+                        embedding=vector if _HAS_PGVECTOR else (str(vector) if vector else None)
                     )
                     await session.execute(stmt)
             print(f"✅ Ingestion Complete: {len(extracted_data.chunks)} chunks added.")

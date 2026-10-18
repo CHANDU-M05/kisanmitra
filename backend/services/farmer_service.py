@@ -45,6 +45,9 @@ _HISTORICAL_AREA: dict[str, dict[str, int]] = {
 _SATURATION_CACHE = {}
 _CACHE_TTL_SECONDS = 300  # 5 minutes
 
+# Used when the reference table has no entry for this district/crop pair.
+_DEFAULT_DISTRICT_AREA = 5000
+
 async def calc_saturation(
     district: str,
     crop: str,
@@ -73,7 +76,12 @@ async def calc_saturation(
     total_area   = sum(areas)
     farmer_count = len(areas)
 
-    avg_area = _HISTORICAL_AREA.get(dist, {}).get(cr, 5000)
+    # The denominator is a published statistics reference, never a measured
+    # arrival. It is returned so no caller has to invent its own capacity figure
+    # (the dashboard used to hardcode 175 acres for every market and crop).
+    reference_area = _HISTORICAL_AREA.get(dist, {}).get(cr)
+    reference_basis = "district_crop_statistics" if reference_area is not None else "state_average_fallback"
+    avg_area = reference_area if reference_area is not None else _DEFAULT_DISTRICT_AREA
     sat_pct  = (total_area / avg_area) * 100 if avg_area else 0.0
 
     if sat_pct >= 70:
@@ -93,6 +101,10 @@ async def calc_saturation(
         "farmer_count":   farmer_count,
         "total_area":     total_area,
         "season":         season,
+        # Provenance of the denominator, so a reader can tell a real reference
+        # district/crop figure from the generic fallback.
+        "reference_area_acres": reference_area,
+        "reference_basis":      reference_basis,
     }
     
     _SATURATION_CACHE[cache_key] = (response, time.time())

@@ -16,6 +16,7 @@ from aiogram.types import Message
 
 from telegram_bot.config import BACKEND_URL, BACKEND_TIMEOUT, INTERNAL_SECRET
 from telegram_bot.keyboards import main_menu_keyboard
+from telegram_bot.messaging import answer_safe
 
 router = Router()
 logger = logging.getLogger("kisanmitra.telegram.mycrops")
@@ -71,8 +72,8 @@ async def mycrops_command(message: Message, state: FSMContext) -> None:
 
     lines.append("\n_KisanMitra 🌾 — ಶ್ರೇಷ್ಠ ಬೆಳೆ ನಿರ್ಧಾರಗಳಿಗೆ_")
 
-    await message.answer(
+    await answer_safe(
+        message,
         "\n".join(lines),
-        parse_mode="Markdown",
         reply_markup=main_menu_keyboard(),
     )

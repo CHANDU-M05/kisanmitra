@@ -17,7 +17,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from backend.core.database import engine
 from backend.routers import api_router
-from backend.services import ml_service
+from backend.services import ml_service, scheduler
 
 # ── Logging ───────────────────────────────────────────────
 from backend.core.logging_config import setup_kisanmitra_logging
@@ -40,9 +40,15 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     except Exception as e:
         logger.error(f"Failed to load ML model: {e}")
 
+    # Scheduled AGMARKNET ingest. The freshness gate in price_service is only
+    # meaningful if something keeps the feed current, so it starts with the app
+    # and is cancelled (not abandoned) on shutdown.
+    refresh_task = scheduler.start_refresh_task()
+
     yield
 
     logger.info("Shutting down KisanMitra API...")
+    await scheduler.stop_refresh_task(refresh_task)
     await engine.dispose()
 
 

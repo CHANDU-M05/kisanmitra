@@ -43,4 +43,20 @@ WEBHOOK_URL: str = os.getenv("TELEGRAM_WEBHOOK_URL", "")
 WEBHOOK_SECRET: str = os.getenv("TELEGRAM_WEBHOOK_SECRET", "")
 
 # Shared internal secret for bot-to-backend API authentication
-INTERNAL_SECRET: str = os.getenv("SECRET_KEY", "REDACTED_IN_HISTORY")
+# No default: the previous fallback was a value committed to this repository,
+# so any reader of the source could authenticate to the backend as the bot.
+INTERNAL_SECRET: str = _require("SECRET_KEY")
+
+try:
+    # Same leak check the API applies; the bot is also deployable standalone.
+    from backend.core.config import is_known_compromised_secret
+except Exception:  # pragma: no cover - standalone bot install
+    def is_known_compromised_secret(value: str) -> bool:  # noqa: F811
+        return False
+
+if is_known_compromised_secret(INTERNAL_SECRET):
+    raise RuntimeError(
+        "SECRET_KEY is byte-identical to a credential this repository published. "
+        "Rotate it before starting the bot — see the credential rotation section "
+        "of the hardening report."
+    )

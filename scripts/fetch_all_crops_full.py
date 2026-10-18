@@ -4,13 +4,21 @@ from data.gov.in Resource ID: 35985678-0d79-46b4-9ed6-6f13308a1d24
 No row cap. After each commodity, runs the same gap analysis used for Potato.
 Saves each commodity to data/raw/real_agmarknet_{crop}_full.csv
 """
+import sys
 import requests
 import pandas as pd
 import time
 from pathlib import Path
 
-KEY = "REDACTED_IN_HISTORY"
-RESOURCE_ID = "35985678-0d79-46b4-9ed6-6f13308a1d24"
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+from backend.core.config import redact_secrets, settings  # noqa: E402
+
+# Credential comes from .env only. It previously lived in this file, which put a
+# live data.gov.in key into the repository and every archive of it.
+KEY = settings.data_gov_api_key
+if not KEY:
+    raise SystemExit("DATA_GOV_API_KEY is not set in .env — cannot download.")
+RESOURCE_ID = settings.agmarknet_resource_id
 RAW_DIR = Path("data/raw")
 RAW_DIR.mkdir(parents=True, exist_ok=True)
 
@@ -70,7 +78,7 @@ def fetch_crop(api_name, label, known_total):
                     print(f"  HTTP {r.status_code} at offset {offset}, retrying ({attempt+1})...")
                     time.sleep(3)
             except Exception as e:
-                print(f"  Exception at offset {offset}: {e}, retrying ({attempt+1})...")
+                print(f"  Exception at offset {offset}: {redact_secrets(str(e))}, retrying ({attempt+1})...")
                 time.sleep(3)
 
         if not success or not batch:

@@ -1,77 +1,150 @@
-from datetime import date, datetime, timedelta
-import numpy as np
+"""
+backend/routers/prices.py — REST price surface for the React dashboard.
+
+This file used to contain a SECOND, UNGATED implementation of forecasting:
+`/predict` took whatever `current_price` the caller put in the URL, skipped any
+record lookup, skipped the freshness SLA, and defaulted `arrivals_tonnes` to a
+hardcoded 100.0. The dashboard fed it a price drawn from a *synthetic* history
+fallback and rendered the result as a live prediction. Every route here now
+either reads real MandiPrice rows or returns an explicit no-data/stale state —
+and the forecast logic itself lives in `price_service`, so the bot and the
+dashboard cannot disagree about what counts as a current price.
+
+Contract notes for API consumers (intentional changes, all additive or
+documented):
+  * `/predict` keeps its legacy field names (predicted_price, confidence_low,
+    confidence_high, signal, ...) but `predicted_price` is now `null` whenever
+    no forecast was produced, instead of a fabricated number.
+  * `/predict` no longer requires `current_price`; a supplied value is treated
+    as a labelled what-if scenario (`price_provenance="caller_scenario"`),
+    never as a verified observation.
+  * `/history` returns only rows that exist in the database; an empty array
+    means "no data", not "here is a made-up series".
+  * `/latest-watch` never invents a rupee amount: an unavailable price is
+    `price: null` with `state: "NO_DATA"`.
+"""
+from datetime import date, datetime, timedelta, timezone
+
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from backend.core.config import settings
 from backend.core.database import get_db
 from backend.core.models import MandiPrice
-from backend.schemas import PriceRequest
-from backend.services import ml_service
+from backend.services import price_service
 
 router = APIRouter(prefix="/prices", tags=["prices"])
 
+
+def _date_of(value) -> str | None:
+    """arrival_date reaches us as date, datetime or str depending on driver."""
+    if value is None:
+        return None
+    if isinstance(value, datetime):
+        return value.date().isoformat()
+    if isinstance(value, date):
+        return value.isoformat()
+    return str(value)[:10]
+
+
+def _predict_response(res: dict) -> dict:
+    """
+    Map the shared price contract onto the field names the dashboard reads.
+
+    Kept as a thin view so `/predict` cannot grow its own freshness rules again.
+    """
+    data_source = res.get("data_source")
+    shape = {
+        "commodity":      res.get("crop"),
+        "market":         res.get("market"),
+        "district":       res.get("district"),
+        "type":           res["type"],
+        "current_price":  res.get("current_price"),
+        "price_as_of":    res.get("price_as_of"),
+        "days_old":       res.get("days_old"),
+        "data_source":    data_source,
+        "source_market":  res.get("source_market"),
+        "data_quality":   res.get("data_quality", []),
+        "arrivals_tonnes":     res.get("arrivals_tonnes"),
+        "arrivals_provenance": res.get("arrivals_provenance"),
+        # The price came from a verified mandi row, or it came from the query
+        # string and is a scenario. Nothing in between — and when there is no
+        # price at all, there is no provenance to claim either.
+        "price_provenance": (
+            None if res.get("current_price") is None
+            else ("caller_scenario" if data_source == "caller_scenario"
+                  else "verified_mandi")
+        ),
+        "crop_mape_pct":  res.get("crop_mape_pct"),
+        "msp_floor":      res.get("msp_floor"),
+        "msp_ratio":      res.get("msp_ratio"),
+    }
+
+    if res["type"] in ("forecast", "anomaly_flagged"):
+        shape.update({
+            "predicted_price": res["forecast"],
+            "confidence_low":  res["lower"],
+            "confidence_high": res["upper"],
+            "signal":          res["signal"],
+            "signal_kannada":  res["signal_kannada"],
+            "is_anomaly":      res["is_anomaly"],
+            "anomaly_type":    res["anomaly_type"],
+            "deviation_pct":   res["deviation_pct"],
+        })
+        return shape
+
+    # No forecast was produced: say so with nulls rather than a plausible number.
+    shape.update({
+        "predicted_price": None,
+        "confidence_low":  None,
+        "confidence_high": None,
+        "signal":          None,
+        "signal_kannada":  None,
+        "is_anomaly":      False,
+        "anomaly_type":    None,
+        "deviation_pct":   None,
+    })
+    if res["type"] == "stale_data":
+        shape.update({
+            "max_age_days":     res["max_age_days"],
+            "stale_reason":     res["stale_reason"],
+            "feed_newest_date": res["feed_newest_date"],
+            "feed_age_days":    res["feed_age_days"],
+            "message": (
+                f"Latest verified price for this mandi is from {res['price_as_of']} "
+                f"({res['days_old']} days old), beyond the "
+                f"{res['max_age_days']}-day freshness limit. No forecast is produced "
+                "from a stale price."
+            ),
+        })
+    elif res["type"] == "no_data":
+        shape["message"] = (
+            "No mandi record found in the database for this crop and market, so "
+            "there is no price to forecast from."
+        )
+    elif res["type"] == "error":
+        shape["message"] = res.get("detail")
+    return shape
+
+
 @router.get("/predict")
 async def predict_price(
-    commodity: str = Query(...),
-    market: str = Query(...),
-    current_price: float = Query(...),
-    arrivals_tonnes: float = Query(None),
+    commodity: str = Query(..., min_length=2, max_length=60),
+    market: str = Query(..., min_length=2, max_length=60),
+    # Optional and explicitly a scenario: a query parameter is a hypothesis, not
+    # an observation. Omitting it is the normal case for a live forecast.
+    current_price: float | None = Query(None, gt=0, le=1_000_000),
+    arrivals_tonnes: float | None = Query(None, ge=0, le=10_000_000),
     db: AsyncSession = Depends(get_db),
 ) -> dict:
-    if ml_service.MODEL is None:
-        raise HTTPException(503, "Model not loaded. Run scripts/03_train_model.py first.")
-
-    # If caller didn't supply arrivals_tonnes, pull the latest real value from DB.
-    if arrivals_tonnes is None:
-        arr_row = await db.execute(
-            select(MandiPrice.arrivals_tonnes)
-            .where(
-                MandiPrice.commodity.ilike(commodity),
-                MandiPrice.market.ilike(market),
-                MandiPrice.arrivals_tonnes.isnot(None),
-            )
-            .order_by(MandiPrice.arrival_date.desc())
-            .limit(1)
-        )
-        latest_arr = arr_row.scalar_one_or_none()
-        arrivals_tonnes = float(latest_arr) if latest_arr else 100.0
-
-    X    = await ml_service.build_features(
-        current_price, arrivals_tonnes,
-        date.today().month, commodity, market, db,
+    result = await price_service.get_market_forecast(
+        commodity.strip(), market.strip(), db,
+        scenario_price=current_price, scenario_arrivals=arrivals_tonnes,
     )
-    pred_res = ml_service.make_prediction(X, current_price)
-    pred = pred_res["pred"]
-    low = pred_res["low"]
-    high = pred_res["high"]
-    signal, signal_kn = ml_service.price_signal(pred, current_price)
-
-    meta = ml_service.crop_prediction_meta(commodity, current_price)
-
-    # Anomaly calculation (>30% shift vs current spot price)
-    price_diff_pct = abs(pred - current_price) / max(current_price, 1) * 100
-    is_anomaly = price_diff_pct > 30.0
-    anomaly_type = "SPIKE" if pred > current_price else ("CRASH" if pred < current_price else "NORMAL")
-
-    return {
-        "commodity":       commodity,
-        "market":          market,
-        "current_price":   current_price,
-        "predicted_price": round(pred, 0),
-        "confidence_low":  round(low, 0),
-        "confidence_high": round(high, 0),
-        "signal":          signal,
-        "signal_kannada":  signal_kn,
-        "is_anomaly":      is_anomaly,
-        "anomaly_type":    anomaly_type,
-        "deviation_pct":   round(price_diff_pct, 1),
-        # Per-crop model accuracy and MSP — served from backend lookup tables
-        # so the frontend never holds a stale hardcoded figure.
-        "crop_mape_pct":   meta["crop_mape_pct"],   # float | null
-        "msp_floor":       meta["msp_floor"],        # float | null (null = non-MSP crop)
-        "msp_ratio":       meta["msp_ratio"],        # float | null
-    }
+    if result["type"] == "error":
+        raise HTTPException(503, result["detail"])
+    return _predict_response(result)
 
 
 @router.get("/history/{market}/{commodity}")
@@ -81,72 +154,115 @@ async def price_history(
     days: int = Query(default=60, ge=1, le=365),
     db: AsyncSession = Depends(get_db),
 ) -> list[dict]:
-    cutoff = datetime.now() - timedelta(days=days)
+    """
+    Observed prices only. An empty array means the database has no rows.
+
+    The old fallback here called `ml_service.generate_sample_history()`, which
+    returns seasonal constants plus Gaussian noise DATED AS THE LAST `days`
+    DAYS. The dashboard took its last element as today's spot price and sent it
+    to `/predict`, so a fabricated series produced a fabricated live forecast.
+    """
+    cutoff = datetime.now(timezone.utc) - timedelta(days=days)
     result = await db.execute(
         select(MandiPrice.arrival_date, MandiPrice.modal_price)
         .where(
-            MandiPrice.market.ilike(market),
-            MandiPrice.commodity.ilike(commodity),
+            MandiPrice.market.ilike(f"%{market.strip()}%"),
+            MandiPrice.commodity.ilike(f"%{commodity.strip()}%"),
             MandiPrice.arrival_date >= cutoff,
+            MandiPrice.modal_price.isnot(None),
         )
         .order_by(MandiPrice.arrival_date.asc())
     )
-    rows = result.all()
-    if rows:
-        return [{"date": r.arrival_date.date().isoformat(), "price": r.modal_price, "is_synthetic": False} for r in rows]
-    
-    synthetic_data = ml_service.generate_sample_history(market, commodity, days)
-    for item in synthetic_data:
-        item["is_synthetic"] = True
-    return synthetic_data
+    return [
+        {"date": _date_of(r.arrival_date), "price": float(r.modal_price),
+         "is_synthetic": False}
+        for r in result.all()
+    ]
+
+
+def _watch_state(price: float | None, delta: float | None, days_old: int | None) -> str:
+    if price is None:
+        return "NO_DATA"
+    if days_old is not None and days_old > settings.price_max_age_days:
+        return "STALE"
+    if delta is None:
+        return "UNKNOWN"
+    return "BULLISH" if delta > 0 else ("CRASH_RISK" if delta < 0 else "STABLE")
+
 
 @router.get("/latest-watch")
 async def latest_prices(db: AsyncSession = Depends(get_db)) -> list[dict]:
-    """Returns the latest spot prices for top commodities for the UI watchlist.
-    
-    Delta is calculated as the difference between the two most recent modal prices
-    per commodity, so it reflects an actual price movement rather than a random stub.
     """
-    # Only include crops that have real data in the AGMARKNET database.
-    # Cotton and Sugarcane are excluded — they are traded on different exchanges
-    # and are not present in the Karnataka AGMARKNET dataset used by this system.
+    Watchlist ticker: latest verified mandi price per crop.
+
+    Two honesty rules encoded here:
+      1. Nothing is returned for an absent crop except an explicit NO_DATA row —
+         the previous `base_prices` dict invented rupee amounts for a market it
+         had never queried.
+      2. A day-on-day delta is only reported when both observations come from
+         the SAME mandi. Comparing this week's Kolar price with last week's
+         Hosakote price is a market comparison, not a price movement.
+    """
+    # Cotton and Sugarcane are excluded — traded on different exchanges and not
+    # present in the Karnataka AGMARKNET dataset this system uses.
     top_crops = ["Tomato", "Onion", "Potato", "Ragi", "Maize", "Brinjal", "Marigold"]
     results = []
 
     for crop in top_crops:
-        res = await db.execute(
-            select(MandiPrice.modal_price, MandiPrice.district, MandiPrice.arrival_date)
-            .where(MandiPrice.commodity.ilike(crop), MandiPrice.modal_price.isnot(None))
+        latest = (await db.execute(
+            select(MandiPrice.modal_price, MandiPrice.market, MandiPrice.district,
+                   MandiPrice.arrival_date)
+            .where(MandiPrice.commodity.ilike(f"%{crop}%"),
+                   MandiPrice.modal_price.isnot(None))
             .order_by(MandiPrice.arrival_date.desc())
-            .limit(2)
-        )
-        rows = res.all()
-        if rows:
-            latest_price = rows[0].modal_price
-            prev_price = rows[1].modal_price if len(rows) > 1 else latest_price
-            delta = round(latest_price - prev_price, 2)
+            .limit(1)
+        )).first()
+
+        if latest is None or latest.modal_price is None:
             results.append({
                 "crop": crop.upper(),
-                "mandi": f"{rows[0].district} Mandi",
-                "price": latest_price,
-                "delta": delta,
-                "state": "BULLISH" if delta > 0 else ("CRASH_RISK" if delta < 0 else "STABLE"),
+                "mandi": None,
+                "price": None,
+                "delta": None,
+                "state": "NO_DATA",
+                "as_of": None,
+                "days_old": None,
+                "stale": False,
                 "is_synthetic": False,
+                "note": "No mandi record for this crop in the database.",
             })
-        else:
-            # Fallback for empty DB — realistic reference prices from Karnataka mandis
-            base_prices = {
-                "Tomato": 1720, "Onion": 1580, "Potato": 2100,
-                "Ragi": 3850, "Maize": 2100, "Brinjal": 1200, "Marigold": 900,
-            }
-            results.append({
-                "crop": crop.upper(),
-                "mandi": "Karnataka Mandi",
-                "price": base_prices.get(crop, 2000),
-                "delta": 0.0,
-                "state": "STABLE",
-                "is_synthetic": True,
-            })
+            continue
+
+        days_old = price_service.record_age_days(latest.arrival_date)
+        prior = (await db.execute(
+            select(MandiPrice.modal_price)
+            .where(
+                MandiPrice.commodity.ilike(f"%{crop}%"),
+                MandiPrice.market.ilike(latest.market),
+                MandiPrice.modal_price.isnot(None),
+                MandiPrice.arrival_date < latest.arrival_date,
+            )
+            .order_by(MandiPrice.arrival_date.desc())
+            .limit(1)
+        )).first()
+
+        delta = (round(float(latest.modal_price) - float(prior.modal_price), 2)
+                 if prior is not None and prior.modal_price is not None else None)
+
+        results.append({
+            "crop": crop.upper(),
+            "mandi": latest.market,
+            "district": latest.district,
+            "price": float(latest.modal_price),
+            "delta": delta,
+            "state": _watch_state(float(latest.modal_price), delta, days_old),
+            "as_of": _date_of(latest.arrival_date),
+            "days_old": days_old,
+            "stale": days_old is not None and days_old > settings.price_max_age_days,
+            "is_synthetic": False,
+            "note": (None if delta is not None
+                     else "No earlier record from this same mandi, so no movement can be reported."),
+        })
 
     return results
 
@@ -160,7 +276,8 @@ async def get_crops_markets(db: AsyncSession = Depends(get_db)) -> dict:
     crops = [c[0].strip().title() for c in crops_result.all() if c[0]]
     markets = [m[0].strip().title() for m in markets_result.all() if m[0]]
     
-    # Fallback to standard set if empty
+    # Fallback to standard set if empty — option lists for the pickers, not
+    # monetary values, so a static default here fabricates no market data.
     if not crops:
         crops = ["Tomato", "Potato", "Onion", "Maize", "Ragi", "Brinjal", "Marigold"]
     if not markets:

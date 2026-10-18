@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import json
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta
 from pathlib import Path
 
 import joblib
@@ -10,13 +10,16 @@ import pandas as pd
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from backend.core.config import settings
 from backend.core.models import MandiPrice
 
 import logging
 logger = logging.getLogger("kisanmitra.ml_service")
 
 BASE_DIR   = Path(__file__).resolve().parents[2]
-MODELS_DIR = BASE_DIR / "data" / "models"
+# Production containers get the models via a read-only bind mount and set
+# MODEL_DIR; the repo path keeps local development working unchanged.
+MODELS_DIR = Path(settings.model_dir) if settings.model_dir else BASE_DIR / "data" / "models"
 
 MODEL: object | None = None
 ENCODERS: dict | None = None
@@ -228,10 +231,12 @@ async def build_features(
         )
         last_date = last_date_res.scalar_one_or_none()
         if last_date:
-            if isinstance(last_date, date):
-                days_since_last_report = float((date.today() - last_date).days)
-            else:
-                days_since_last_report = float((date.today() - last_date.date()).days)
+            # NOTE: datetime is a subclass of date, so isinstance(x, date) alone
+            # cannot tell a TIMESTAMP column (which SQLAlchemy returns as a
+            # tz-aware datetime) from a DATE column. Normalise first, subtract
+            # dates only — the previous ordering raised TypeError on live data.
+            last_day = last_date.date() if isinstance(last_date, datetime) else last_date
+            days_since_last_report = float((date.today() - last_day).days)
     
     commodity_encoded = 0.0
     market_encoded = 0.0
@@ -270,11 +275,18 @@ async def build_features(
     row = {f: values.get(f, 0.0) for f in FEATURES}
     return pd.DataFrame([row])[FEATURES]
 
-def price_signal(pred: float, current: float) -> tuple[str, str]:
+def price_signal(pred: float, current: float, commodity: str | None = None) -> tuple[str, str]:
+    """Actionable SELL/WAIT signal ONLY when the forecast movement clears
+    half of the crop's own benchmark MAPE. For high-MAPE crops (Tomato ~28%)
+    a ±10% 'signal' is statistical noise — the band widens so the bot stays
+    NEUTRAL instead of issuing confident wrong advice.
+    """
     pct = (pred - current) / current * 100
-    if pct > 10:
+    mape = CROP_MAPE.get((commodity or "").strip().title())
+    band = max(10.0, (mape / 2.0) if mape else 0.0)
+    if pct > band:
         return "WAIT — Price likely rising", "ಬೆಲೆ ಏರಲಿದೆ — ಕಾಯಿರಿ ⬆"
-    if pct < -10:
+    if pct < -band:
         return "SELL NOW — Price likely falling", "ಈಗಲೇ ಮಾರಿ — ಬೆಲೆ ಇಳಿಯಲಿದೆ ⬇"
     return "NEUTRAL — Monitor weekly", "ಸ್ಥಿರ ಬೆಲೆ — ವಾರ ವಾರ ಗಮನಿಸಿ ➡"
 
@@ -298,7 +310,7 @@ def crop_prediction_meta(commodity: str, current_price: float) -> dict:
     }
 
 
-def make_prediction(X: np.ndarray, current_price: float) -> dict[str, float]:
+def make_prediction(X: np.ndarray, current_price: float, commodity: str | None = None) -> dict[str, float]:
     """
     Safely make a price prediction using MODEL and METADATA.
     Handles log1p target inverse transformation (np.expm1) if specified in metadata.
@@ -324,8 +336,12 @@ def make_prediction(X: np.ndarray, current_price: float) -> dict[str, float]:
         low = float(np.percentile(trees, 15))
         high = float(np.percentile(trees, 85))
     else:
-        low = pred * 0.85
-        high = pred * 1.15
+        # No tree ensemble to sample: use the crop's own benchmark MAPE as an
+        # honest uncertainty band instead of a fake ±15% precision claim.
+        mape = CROP_MAPE.get((commodity or "").strip().title())
+        band = min(0.35, max(0.15, (mape / 100.0) if mape else 0.15))
+        low = pred * (1 - band)
+        high = pred * (1 + band)
 
     # Sanity guard: prediction must not deviate by >5x or <1/5th from current_price
     if current_price > 0:

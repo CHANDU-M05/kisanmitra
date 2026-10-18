@@ -4,7 +4,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, delete
 from backend.core.database import get_db
 from backend.core.models import AdminUser, RevokedToken
-from backend.core.security import verify_password, create_access_token, SECRET_KEY, ALGORITHM
+from backend.core.security import verify_password, create_access_token, signing_key, ALGORITHM
 from typing import Annotated
 from jose import JWTError, jwt
 import datetime
@@ -76,7 +76,7 @@ async def get_current_user(
         headers={"WWW-Authenticate": "Bearer"},
     )
     try:
-        payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
+        payload = jwt.decode(token, signing_key(), algorithms=[ALGORITHM])
         username: str = payload.get("sub")
         jti: str = payload.get("jti")
         exp: int = payload.get("exp")
