@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import contextlib
 import datetime
+from types import SimpleNamespace
 import pytest
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -26,20 +27,15 @@ from unittest.mock import AsyncMock, MagicMock, patch
 # ── Shared helpers ────────────────────────────────────────────────────────────
 
 def _make_db_mock_for_price(current_price: float = 2000.0, arrivals: float = 80.0) -> AsyncMock:
-    """DB mock matching the exact query sequence for a PRICE_QUERY with pre-resolved entities."""
-    db = AsyncMock()
-    empty_list  = MagicMock(scalars=MagicMock(return_value=MagicMock(all=MagicMock(return_value=[]))))
-    no_prior    = MagicMock(first=MagicMock(return_value=None))
-    price_res   = MagicMock(); price_res.scalar_one_or_none.return_value = current_price
-    arr_res     = MagicMock(); arr_res.scalar_one_or_none.return_value   = arrivals
-    hist_series = MagicMock(scalars=MagicMock(return_value=MagicMock(all=MagicMock(return_value=[]))))
-    db.execute  = AsyncMock(side_effect=[
-        empty_list, empty_list, no_prior,   # context recovery (3 queries)
-        price_res, arr_res, hist_series,    # _handle_price (3 queries)
-    ])
-    db.add    = MagicMock()
-    db.commit = AsyncMock()
-    return db
+    """DB mock matching the exact query sequence for a PRICE_QUERY with pre-resolved entities.
+
+    With body.intent + crop + district all explicit, _resolve_conversation_context makes
+    0 queries, and price_service.get_price_forecast makes exactly 3:
+    spot-price row, arrivals row, history-count probe.
+    """
+    from price_test_helpers import price_db
+
+    return price_db(price=current_price, arrivals=arrivals, days_old=0)
 
 
 # ── Tests ─────────────────────────────────────────────────────────────────────
@@ -90,8 +86,6 @@ async def test_smoke_declare_crop_with_telegram_farmer_name():
     prior_row.declared_at is a real datetime (not MagicMock) to pass >= cutoff.
     """
     from backend.routers.conversation import conversation_message, ConversationRequest
-
-    from types import SimpleNamespace
 
     # Use SimpleNamespace so declared_at is a real datetime — MagicMock attributes
     # don't reliably hold assigned datetime values through SQLAlchemy ORM access patterns.

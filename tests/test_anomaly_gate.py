@@ -11,6 +11,8 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
+from price_test_helpers import price_db
+
 
 @pytest.mark.asyncio
 async def test_price_anomaly_flagged_on_high_deviation():
@@ -20,16 +22,8 @@ async def test_price_anomaly_flagged_on_high_deviation():
     """
     from backend.routers.conversation import _handle_price
 
-    db = AsyncMock()
-
-    # Mock MandiPrice query -> current_price = 1000
-    price_res = MagicMock()
-    price_res.scalar_one_or_none.return_value = 1000.0
-
-    arr_res = MagicMock()
-    arr_res.scalar_one_or_none.return_value = 50.0
-
-    db.execute = AsyncMock(side_effect=[price_res, arr_res])
+    # Fresh spot price = 1000 so the forecast is allowed at all (freshness gate).
+    db = price_db(price=1000.0, arrivals=50.0, days_old=0)
 
     with patch("backend.services.ml_service.MODEL", new=MagicMock()), \
          patch("backend.services.ml_service.build_features", new_callable=AsyncMock) as mock_feat, \
@@ -59,19 +53,8 @@ async def test_price_normal_forecast_on_low_deviation():
     """
     from backend.routers.conversation import _handle_price
 
-    db = AsyncMock()
-
-    # Mock MandiPrice query -> current_price = 1000
-    price_res = MagicMock()
-    price_res.scalar_one_or_none.return_value = 1000.0
-
-    arr_res = MagicMock()
-    arr_res.scalar_one_or_none.return_value = 50.0
-
-    hist_res = MagicMock()
-    hist_res.scalars.return_value.all.return_value = []
-
-    db.execute = AsyncMock(side_effect=[price_res, arr_res, hist_res])
+    # Fresh spot price = 1000 so the forecast is allowed at all (freshness gate).
+    db = price_db(price=1000.0, arrivals=50.0, days_old=0)
 
     with patch("backend.services.ml_service.MODEL", new=MagicMock()), \
          patch("backend.services.ml_service.build_features", new_callable=AsyncMock) as mock_feat, \
