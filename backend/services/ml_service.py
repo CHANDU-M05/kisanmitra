@@ -26,6 +26,94 @@ ENCODERS: dict | None = None
 FEATURES: list[str] = []
 METADATA: dict = {}
 
+# Model readiness is surfaced separately from MODEL so /health and /predict can
+# tell "still loading" (a transient cold-start state worth retrying) apart from
+# "not available" (a missing/failed artifact). One of: unloaded, loading, ready,
+# failed.
+MODEL_STATUS: str = "unloaded"
+MODEL_STATUS_DETAIL: str = "model load has not started"
+
+_MODEL_FILES = ("price_model.pkl", "encoders.pkl", "model_metadata.json")
+
+
+def model_loaded() -> bool:
+    return MODEL is not None and MODEL_STATUS == "ready"
+
+
+def unavailable_detail() -> str:
+    """Explain why a forecast is not possible right now.
+
+    A cold start that is still loading is a retry-later situation, not a
+    broken deployment; only report the training hint once loading has failed.
+    """
+    if MODEL_STATUS == "loading":
+        return "Model is still loading after a cold start; retry in a few seconds."
+    return "Model not loaded. Run scripts/03_train_model.py first."
+
+
+def models_present() -> bool:
+    """True when every required artifact already exists in MODEL_DIR."""
+    return all((MODELS_DIR / name).is_file() for name in _MODEL_FILES)
+
+
+def _download_and_verify_models() -> None:
+    """
+    Fetch MODEL_URL into MODEL_DIR only after its SHA-256 matches MODEL_SHA256.
+
+    A pickle executes arbitrary code on load, so an unverified download is never
+    run: a missing or mismatching digest raises before anything is unpickled.
+    The archive is a gzipped tar holding the three files at its root (the format
+    produced by publishing data/models as a GitHub Release asset).
+    """
+    import hashlib
+    import tarfile
+    import tempfile
+    import urllib.request
+
+    url = settings.model_url
+    expected = (settings.model_sha256 or "").strip().lower()
+    if not url:
+        raise RuntimeError(
+            "Model artifacts are absent from MODEL_DIR and MODEL_URL is not set. "
+            "Mount the models or provide MODEL_URL + MODEL_SHA256."
+        )
+    if not expected:
+        raise RuntimeError(
+            "MODEL_URL is set but MODEL_SHA256 is not; refusing to download and "
+            "un-pickle an unverified model archive."
+        )
+
+    MODELS_DIR.mkdir(parents=True, exist_ok=True)
+    with tempfile.NamedTemporaryFile(suffix=".tar.gz", delete=False) as tmp:
+        tmp_path = Path(tmp.name)
+    try:
+        with urllib.request.urlopen(url, timeout=120) as resp:  # noqa: S310 (operator-set URL)
+            digest = hashlib.sha256()
+            with open(tmp_path, "wb") as fh:
+                while chunk := resp.read(1 << 20):
+                    digest.update(chunk)
+                    fh.write(chunk)
+        actual = digest.hexdigest()
+        if actual != expected:
+            raise RuntimeError(
+                f"Model archive SHA-256 mismatch (expected {expected}, got {actual}); "
+                "refusing to load an unverified model."
+            )
+        with tarfile.open(tmp_path, "r:*") as tar:
+            # Reject absolute paths / traversal before extracting.
+            for member in tar.getmembers():
+                if member.name.startswith("/") or ".." in Path(member.name).parts:
+                    raise RuntimeError(f"Unsafe path in model archive: {member.name}")
+            tar.extractall(MODELS_DIR)
+    finally:
+        tmp_path.unlink(missing_ok=True)
+    if not models_present():
+        raise RuntimeError(
+            "Model archive verified and extracted but the expected files are still "
+            f"missing from {MODELS_DIR}."
+        )
+
+
 # ── Per-crop MAPE from the clean chronological benchmark (task-4052 / task-4119)
 # Source: scripts/clean_benchmark.py — chronological 80/20 split, 9,672 rows,
 # January 2020 → April 2025. Update this table whenever the model is retrained
@@ -68,7 +156,12 @@ _PRICE_PATTERNS: dict[str, dict[str, list[int]]] = {
 
 def load_model() -> None:
     global MODEL, ENCODERS, FEATURES, METADATA, CROP_MAPE, MSP_CURRENT
+    global MODEL_STATUS, MODEL_STATUS_DETAIL
+    MODEL_STATUS = "loading"
+    MODEL_STATUS_DETAIL = "loading model artifacts"
     try:
+        if not models_present():
+            _download_and_verify_models()
         MODEL = joblib.load(MODELS_DIR / "price_model.pkl")
         ENCODERS = joblib.load(MODELS_DIR / "encoders.pkl")
         with open(MODELS_DIR / "model_metadata.json") as f:
@@ -90,8 +183,13 @@ def load_model() -> None:
                     f"but the loaded model expects {expected_count} columns."
                 )
         logger.info(f"[startup] Price model loaded — {len(FEATURES)} features.")
+        MODEL_STATUS = "ready"
+        MODEL_STATUS_DETAIL = f"loaded {len(FEATURES)} features"
     except Exception as exc:
         logger.error(f"[startup] Model not loaded: {exc}")
+        MODEL = None
+        MODEL_STATUS = "failed"
+        MODEL_STATUS_DETAIL = str(exc)
         raise exc
 
 
@@ -165,7 +263,10 @@ async def build_features(
         # Calculate clean prior-years seasonal average matching the training feature
         prior_prices = []
         if db is not None:
-            from datetime import date
+            # `date` is imported at module level; a local `from datetime import
+            # date` here would make it function-local and raise UnboundLocalError
+            # at the days_since_last_report computation whenever this branch did
+            # not run (fewer than 3 stored prices — a freshly seeded database).
             current_year = date.today().year
             hist_result = await db.execute(
                 select(MandiPrice.arrival_date, MandiPrice.modal_price)
