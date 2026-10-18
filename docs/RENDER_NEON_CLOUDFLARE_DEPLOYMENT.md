@@ -26,8 +26,9 @@ Every secret that ever appeared in a committed `.env` must be rotated *before*
 pasting it into any of these dashboards. The app refuses to boot in production
 with known-leaked values (digest registry `is_known_compromised_secret` in
 `backend/core/config.py`, enforced by `validate_production_settings`), so this
-is mandatory, not advice. Rotate: WhatsApp token / app secret / verify token,
-Gemini key, Telegram token, data.gov.in key, JWT `SECRET_KEY`, DB password.
+is mandatory, not advice. Rotate: Gemini key, Telegram token, data.gov.in key,
+JWT `SECRET_KEY`, DB password — and WhatsApp token / app secret / verify token
+when that channel is enabled (it is optional; see §3.4 and §5).
 
 Reference variable names in docs and tickets — never paste values anywhere.
 
@@ -170,8 +171,14 @@ silent forecasting outage is not mistaken for success.
    `DB_USER`, `DB_PASSWORD`, `CORS_ORIGINS`, `MODEL_URL`, `MODEL_SHA256`.
    `CORS_ORIGINS` must be the exact Pages origin, e.g.
    `https://kisanmitra.pages.dev` (comma-separate more origins; no `*` —
-   production config validation rejects wildcards). Leave WhatsApp/Telegram/
-   Gemini keys empty for now if you don't need those channels yet; the app
+   production config validation rejects wildcards). WhatsApp is **not asked
+   for**: it is absent from the blueprint and optional in the app — with
+   `WHATSAPP_TOKEN` unset the server boots cleanly in production and
+   `/webhook/whatsapp` answers 404. To enable the channel later, add
+   `WHATSAPP_TOKEN`, `WHATSAPP_PHONE_NUMBER_ID`, `WHATSAPP_VERIFY_TOKEN` and
+   `WHATSAPP_APP_SECRET` in the dashboard; once `WHATSAPP_TOKEN` is set,
+   production validation requires the last two again, fail-closed. Leave
+   Telegram/Gemini keys empty if you don't need those features yet; the app
    degrades per-feature, not at boot.
 5. Do **not** add a `PORT` env var — Render injects it and the image binds
    `${PORT:-8000}`. Hard-coding it breaks routing (comment in `render.yaml`).
@@ -219,7 +226,10 @@ Turn the pinger on the morning of the demo, off afterwards — do not run it
 
 ## 5. Messaging channels on this stack (what actually works)
 
-- **WhatsApp webhooks:** functional but cold-start-sensitive — after 15 min
+- **WhatsApp webhooks:** optional end to end — unconfigured deploys return
+  404 on `/webhook/whatsapp` and skip its credential checks at boot; when
+  configured, the checks return and the channel is functional but
+  cold-start-sensitive — after 15 min
   idle, Meta's first delivery fails fast and retries; expect seconds-to-minutes
   latency on the *first* message after idleness, not lost messages.
 - **Telegram bot:** needs a long-lived process (polling) or a webhook receiver.

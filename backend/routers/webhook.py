@@ -35,8 +35,19 @@ from backend.services.rag import get_agronomy_advice
 
 router = APIRouter(prefix="/webhook", tags=["webhook"])
 
+
+def _refuse_if_unconfigured() -> None:
+    """WhatsApp is an optional channel. With WHATSAPP_TOKEN unset nothing ever
+    sends to Meta and no webhook is registered, so the routes present as absent
+    (404) rather than as a reachable endpoint whose guards depend only on
+    credentials that a dormant deploy will not have rotated."""
+    if not settings.whatsapp_token.get_secret_value():
+        raise HTTPException(404, "WhatsApp integration is not configured.")
+
+
 @router.get("/whatsapp")
 async def whatsapp_verify(request: Request) -> PlainTextResponse:
+    _refuse_if_unconfigured()
     mode      = request.query_params.get("hub.mode")
     token     = request.query_params.get("hub.verify_token")
     challenge = request.query_params.get("hub.challenge")
@@ -106,6 +117,7 @@ async def whatsapp_message(
     background_tasks: BackgroundTasks,
     x_hub_signature_256: str = Header(None),
 ) -> dict:
+    _refuse_if_unconfigured()
     # ── Security: HMAC Signature Verification ──
     raw_body = await request.body()
     if not verify_signature(raw_body, x_hub_signature_256):

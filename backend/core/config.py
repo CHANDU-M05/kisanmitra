@@ -238,6 +238,13 @@ def validate_production_settings(config: Settings) -> None:
                            "Set it in .env; it is deliberately not hardcoded here.")
         return
 
+    # WhatsApp is optional in production: with WHATSAPP_TOKEN unset no message
+    # can be sent and /webhook/whatsapp 404s (see backend/routers/webhook.py),
+    # so requiring its credentials would block an otherwise-valid deploy. When
+    # the channel IS configured, both checks below stay exactly as fail-closed
+    # as before — enabling WhatsApp later cannot revive unrotated credentials.
+    whatsapp_configured = bool(config.whatsapp_token.get_secret_value())
+
     checks = (
         (bool(config.secret_key) and len(config.secret_key) >= 32
          and not is_known_compromised_secret(config.secret_key),
@@ -246,10 +253,10 @@ def validate_production_settings(config: Settings) -> None:
         (bool(config.db_password)
          and not is_known_compromised_secret(config.db_password),
          "DB_PASSWORD must be set to a non-default production credential."),
-        (bool(config.whatsapp_verify_token)
-         and not is_known_compromised_secret(config.whatsapp_verify_token),
+        (not whatsapp_configured or (bool(config.whatsapp_verify_token)
+         and not is_known_compromised_secret(config.whatsapp_verify_token)),
          "WHATSAPP_VERIFY_TOKEN must be changed from the example default."),
-        (bool(config.whatsapp_app_secret),
+        (not whatsapp_configured or bool(config.whatsapp_app_secret),
          "WHATSAPP_APP_SECRET must be set to enforce webhook signature verification."),
         ("*" not in [origin.strip() for origin in config.cors_origins.split(",")],
          "CORS_ORIGINS must list explicit trusted origins; wildcard is unsafe in production."),

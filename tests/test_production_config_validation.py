@@ -52,6 +52,7 @@ def _production_settings(**overrides):
         "app_env": "production",
         "secret_key": "a-random-production-secret-key-that-is-long-enough",
         "db_password": "a-unique-database-password",
+        "whatsapp_token": "a-configured-whatsapp-token",
         "whatsapp_verify_token": "unique-verify-token",
         "whatsapp_app_secret": "whatsapp-app-secret",
         "cors_origins": "https://kisanmitra.example",
@@ -92,6 +93,28 @@ def test_refresh_may_be_disabled_without_a_data_gov_key():
     """An API that only answers from its own DB must still boot in production."""
     validate_production_settings(_production_settings(
         data_gov_api_key="", refresh_enabled=False))
+
+
+def test_production_boots_with_whatsapp_unconfigured():
+    """WhatsApp is an optional channel: with WHATSAPP_TOKEN unset the webhook
+    404s and nothing can be sent, so its credentials must not block an
+    otherwise-valid deploy (the Render free-tier default)."""
+    validate_production_settings(_production_settings(
+        whatsapp_token="", whatsapp_verify_token="", whatsapp_app_secret=""))
+
+
+def test_enabling_whatsapp_without_rotating_credentials_fails(
+        injected_compromise_list):
+    """Fail-closed on the way IN: setting WHATSAPP_TOKEN revives the credential
+    checks — a leaked verify token or a missing app secret must stop boot even
+    if the deploy previously passed with the channel off."""
+    with pytest.raises(RuntimeError, match="WHATSAPP_APP_SECRET"):
+        validate_production_settings(_production_settings(
+            whatsapp_token="fresh-meta-token", whatsapp_app_secret=""))
+    with pytest.raises(RuntimeError, match="WHATSAPP_VERIFY_TOKEN"):
+        validate_production_settings(_production_settings(
+            whatsapp_token="fresh-meta-token",
+            whatsapp_verify_token=LEAK_UNDER_TEST["whatsapp_verify_token"]))
 
 
 def test_leaked_data_gov_key_is_rejected_even_with_refresh_disabled(injected_compromise_list):

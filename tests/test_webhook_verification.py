@@ -13,6 +13,7 @@ from __future__ import annotations
 import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
+from pydantic import SecretStr
 
 from backend.core.config import settings
 from backend.routers.webhook import router
@@ -23,6 +24,9 @@ CHALLENGE = "1158201444"
 
 @pytest.fixture
 def client(monkeypatch):
+    # The routes 404 unless the channel is configured (WHATSAPP_TOKEN set); the
+    # handshake tests below exercise a configured deploy.
+    monkeypatch.setattr(settings, "whatsapp_token", SecretStr("unit-test-wa-token"))
     monkeypatch.setattr(settings, "whatsapp_verify_token", VERIFY_TOKEN)
     app = FastAPI()
     app.include_router(router)
@@ -56,6 +60,7 @@ def test_an_absent_token_does_not_match_a_configured_one(client):
 
 
 def test_an_unconfigured_token_refuses_service_instead_of_matching_blank(monkeypatch):
+    monkeypatch.setattr(settings, "whatsapp_token", SecretStr("unit-test-wa-token"))
     monkeypatch.setattr(settings, "whatsapp_verify_token", "")
     app = FastAPI()
     app.include_router(router)
@@ -74,3 +79,21 @@ def test_a_wrong_mode_is_refused_even_with_the_right_token(client):
         "hub.challenge": CHALLENGE,
     })
     assert res.status_code == 403
+
+
+def test_both_routes_404_when_the_channel_is_unconfigured(monkeypatch):
+    """WhatsApp is optional in production: an unconfigured WHATSAPP_TOKEN must
+    make the routes present as absent, not as live endpoints guarded only by
+    credentials a dormant deploy never set."""
+    monkeypatch.setattr(settings, "whatsapp_token", SecretStr(""))
+    monkeypatch.setattr(settings, "whatsapp_verify_token", VERIFY_TOKEN)
+    app = FastAPI()
+    app.include_router(router)
+    unknown_app = TestClient(app)
+    res = unknown_app.get("/webhook/whatsapp", params={
+        "hub.mode": "subscribe", "hub.verify_token": VERIFY_TOKEN,
+        "hub.challenge": CHALLENGE,
+    })
+    assert res.status_code == 404
+    res = unknown_app.post("/webhook/whatsapp", json={"entry": []})
+    assert res.status_code == 404

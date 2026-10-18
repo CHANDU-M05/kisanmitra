@@ -110,15 +110,14 @@ services:
         sync: false
       - key: MODEL_SHA256
         sync: false
-      # WhatsApp Cloud API (the production messaging channel).
-      - key: WHATSAPP_TOKEN
-        sync: false
-      - key: WHATSAPP_PHONE_NUMBER_ID
-        sync: false
-      - key: WHATSAPP_VERIFY_TOKEN
-        sync: false
-      - key: WHATSAPP_APP_SECRET
-        sync: false
+      # WhatsApp Cloud API is OPTIONAL and deliberately not listed here: the
+      # blueprint spec has no "optional secret" flag (every sync:false variable
+      # is prompted at creation — render.com/docs/blueprint-spec, checked
+      # 2026-10-18). With WHATSAPP_TOKEN unset the app boots fine in production
+      # and /webhook/whatsapp returns 404. To enable WhatsApp later, add all
+      # four variables manually in the Render dashboard: WHATSAPP_TOKEN,
+      # WHATSAPP_PHONE_NUMBER_ID, WHATSAPP_VERIFY_TOKEN, WHATSAPP_APP_SECRET —
+      # production validation then requires the last two again, fail-closed.
       # Telegram bot does NOT run on Render free (no background workers); these
       # are only needed if the bot runs elsewhere or locally for a demo.
       - key: TELEGRAM_BOT_TOKEN
