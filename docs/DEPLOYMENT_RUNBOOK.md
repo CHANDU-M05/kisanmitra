@@ -84,6 +84,10 @@ These were confirmed against the code, so the deploy artifacts rely on them:
 
 ## One-time setup
 
+> Click-by-click first-time provisioning (Oracle region choice, reserved IP, bootstrap
+> via scp, firewall reconciliation) and the full secrets/`.env.production` setup are in
+> [ORACLE_A1_PROVISIONING_AND_SECRETS.md](./ORACLE_A1_PROVISIONING_AND_SECRETS.md).
+
 1. **Server.** Create an Always Free Ampere A1 VM (Ubuntu 22.04/24.04, 2 OCPU / 12 GB).
    In the VCN security list allow inbound TCP 22, TCP 80, TCP 443, UDP 443.
    If you hit "out of host capacity", retry in another AD or later — a known
