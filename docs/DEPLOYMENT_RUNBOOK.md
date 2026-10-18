@@ -1,8 +1,19 @@
 # KisanMitra Deployment Runbook
 
-Target platform: Oracle Cloud Always Free Ampere A1 VM (ARM64, **2 OCPU / 12 GB RAM** —
-the entitlement was halved from 4 OCPU / 24 GB in July 2026), Ubuntu 22.04/24.04,
-single host, Docker Compose, GitHub Actions, GitHub Container Registry.
+**Two deployment targets live in this repo, and the runbook below the architecture
+section documents the heavier one.** The *current* target is the free-tier
+**Render + Neon + Cloudflare Pages** stack — click-by-click setup in
+[RENDER_NEON_CLOUDFLARE_DEPLOYMENT.md](./RENDER_NEON_CLOUDFLARE_DEPLOYMENT.md).
+It needs none of the machinery in this runbook: Render deploys from `render.yaml`,
+Pages builds the frontend, and the CI/CD workflow's Oracle jobs stay skipped until
+the repo variable `DEPLOY_TARGET=oracle` is set. Be honest about the split: the
+free stack suits demos and the viva but **cannot deliver the heavy-load results
+measured here**; this runbook's Oracle A1 shape (and everything verified against
+it) is the upgrade path for real traffic.
+
+Oracle target platform: Oracle Cloud Always Free Ampere A1 VM (ARM64, **2 OCPU /
+12 GB RAM** — the entitlement was halved from 4 OCPU / 24 GB in July 2026),
+Ubuntu 22.04/24.04, single host, Docker Compose, GitHub Actions, GitHub Container Registry.
 
 ## Architecture
 
@@ -24,17 +35,21 @@ release causes a sub-two-second connection blip while the edge container restart
 ## Repository layout
 
 ```
-.github/workflows/{ci.yml, cd.yml, load-test.yml}
+.github/workflows/{ci.yml, cd.yml, load-test.yml}   # cd.yml gated on vars.DEPLOY_TARGET == 'oracle'
 .github/dependabot.yml
 .dockerignore
+render.yaml                                         # Render blueprint (current target)
 deploy/docker/{backend.Dockerfile, edge.Dockerfile}
 deploy/caddy/Caddyfile
 deploy/docker-compose.production.yml
 deploy/scripts/{deploy.sh, bootstrap_server.sh, backup_postgres.sh,
                 generate_secrets.sh, verify_environment.sh}
-deploy/env/production.env.example
+deploy/env/production.env.example                   # Oracle env template
+deploy/env/render.env.example                       # Render/Neon value assembly
 tests/load/locustfile.py
 docs/DEPLOYMENT_RUNBOOK.md
+docs/RENDER_NEON_CLOUDFLARE_DEPLOYMENT.md
+docs/ORACLE_A1_PROVISIONING_AND_SECRETS.md
 ```
 
 ## Verified repository facts (Phase 2 audit, 2026-10-18)
@@ -202,45 +217,35 @@ once on the VM with `docker stats` during the first weekly load test.
   free aggregate) + 10 TB egress/month. Cloudflare's free tier absorbs most
   static egress.
 
-## Fallback deployment (no Oracle A1 capacity available)
+## Free-tier stack: Render + Neon + Cloudflare Pages (current target)
 
-If repeated retries fail, deploy the same code on split managed free tiers.
-This is a degraded topology: no n8n, no server-side Redis persistence, and the
-backend sleeps when idle. Use the Telegram bot as the public demo channel until
-an Oracle VM is available (see below).
+This is no longer a "fallback" — it is the deployment the project runs on today,
+documented end-to-end in
+[RENDER_NEON_CLOUDFLARE_DEPLOYMENT.md](./RENDER_NEON_CLOUDFLARE_DEPLOYMENT.md).
+Key deltas from everything above, verified against provider docs on 2026-10-18:
 
-1. **Database — Neon (free, 1 GB):** create a project, note the pooled
-   connection string. Neon ships pgvector: run `CREATE EXTENSION IF NOT EXISTS
-   vector;` once (the app's `00_init_db.py` enables it automatically).
-   Set `DB_HOST/DB_NAME/DB_USER/DB_PASSWORD` accordingly (the app composes the
-   DSN; Render provides `DATABASE_URL` style SSL strings — use the non-pooled
-   host for the worker process, SSL required).
-2. **Backend — Render (free web service, 512 MB, spins down after 15 min
-   idle):** Buildpack Docker runtime, push the repo, build command
-   `pip install -r requirements.txt`, start command
-   `gunicorn backend.main:app -k uvicorn.workers.UvicornWorker -b 0.0.0.0:$PORT --workers 1`.
-   Health check path: `/health`. Env: `APP_ENV=production`, `SECRET_KEY`,
-   `DB_*`, `CORS_ORIGINS=https://<pages-domain>`, `WHATSAPP_APP_SECRET`,
-   `WHATSAPP_VERIFY_TOKEN`. `API_WORKERS=1`, `DB_POOL_SIZE=5` (512 MB RAM — the
-   ML model may not fit alongside workers; price forecasts degrade with a clear
-   error, everything else works).
-3. **Frontend — Cloudflare Pages (free, unlimited bandwidth):** build
-   command `cd frontend && npm ci && npm run build`, output dir `dist`, env
-   `VITE_API_URL=https://<render-service>.onrender.com` (NOT `/api` — there is
-   no same-origin Caddy here). Add the Pages domain to backend `CORS_ORIGINS`.
-4. **Redis — Upstash (free, 500K commands/month, 256 MB):** for the Telegram
-   bot only, set `REDIS_URL` to the TLS endpoint (`rediss://…`). Beyond the
-   monthly command quota the bot's middleware fails open to in-memory behaviour.
-5. **Cold-start mitigation:** an uptime pinger (GitHub Actions cron every 10
-   min, or UptimeRobot free) hitting `https://<render>/health` keeps the
-   service warm enough for demos. WhatsApp webhooks WILL see a first-request
-   cold start of ~30–60 s after idleness — Meta retries the verification, but
-   expect delayed message delivery. This is exactly why Oracle (option 1) is
-   the recommended primary.
-6. **No n8n on free tiers** (it needs an always-on container): drive
-   `scripts/refresh_prices.py` from the Render background worker (paid) or the
-   GitHub Actions scheduled workflow instead, or skip automation and use the
-   in-process scheduler on the single dyno-like service.
+- **API:** Render free Docker web service (0.1 CPU / 512 MB, single worker,
+  spins down after 15 min idle, ~1 min cold start, 750 instance-hours/month,
+  ephemeral filesystem — `MODEL_DIR` and friends live under `/tmp`).
+- **Database:** Neon Free Postgres (1 GB storage/project, scale-to-zero after
+  5 min). SSL required (`DB_SSLMODE=require`); use the **direct** endpoint —
+  the pooled PgBouncer endpoint is transaction-mode and breaks the
+  session-level advisory refresh lock. The backend now carries a small pool
+  (3+2), `pool_recycle=300`, and a bounded connect retry for Neon wake-ups.
+- **Models:** 57.2 MB total — not committed, not in the image; downloaded at
+  startup from `MODEL_URL` and **refused unless the SHA-256 matches**.
+- **Frontend:** Cloudflare Pages with `frontend/public/_redirects` and
+  `_headers`; `VITE_API_URL` is a Pages **build-time** variable pointing at
+  the Render origin (the committed `/api` value only works behind Caddy).
+- **CI/CD:** `cd.yml`'s Oracle jobs skip unless `DEPLOY_TARGET=oracle`; Render
+  and Pages deploy from their own dashboards/blueprint, not from GitHub Actions.
+- **What does NOT fit:** n8n (no always-on container), the Telegram bot as a
+  Render process (free tier has no background workers — run it locally with
+  polling against the deployed API), heavy-load claims, and 24/7 low-latency
+  WhatsApp webhooks (first delivery after idle sees the cold start; Meta
+  retries, so messages arrive late rather than lost). The in-process scheduler
+  with `catch_up_on_start` refreshes stale prices automatically whenever the
+  service wakes.
 
 ## Demo channel: Telegram first
 

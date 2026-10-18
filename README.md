@@ -85,6 +85,21 @@ Dashboard available at **http://localhost:3000**.
 
 ---
 
+## 🚀 Deployment
+
+| Target | Stack | Guide |
+|---|---|---|
+| **Current (free tier)** | Render free Docker web service + Neon Free Postgres + Cloudflare Pages PWA | [`docs/RENDER_NEON_CLOUDFLARE_DEPLOYMENT.md`](docs/RENDER_NEON_CLOUDFLARE_DEPLOYMENT.md) |
+| Upgrade path (heavy load) | Oracle Always Free Ampere A1 VM, Docker Compose, Caddy, GitHub Actions | [`docs/DEPLOYMENT_RUNBOOK.md`](docs/DEPLOYMENT_RUNBOOK.md) + [`docs/ORACLE_A1_PROVISIONING_AND_SECRETS.md`](docs/ORACLE_A1_PROVISIONING_AND_SECRETS.md) |
+
+Honest scope: the free stack spins down after 15 min idle (≈1 min cold start),
+runs one 512 MB worker, and does **not** host the Telegram bot or heavy load —
+it is for demos and evaluation. The Oracle path (kept intact in `deploy/`,
+`.github/workflows/cd.yml`) re-arms with `gh variable set DEPLOY_TARGET --body oracle`.
+Blueprint: [`render.yaml`](render.yaml) · env template: [`deploy/env/render.env.example`](deploy/env/render.env.example)
+
+---
+
 ## 🛡️ Testing & Benchmarks
 
 Run the unit test suite:
