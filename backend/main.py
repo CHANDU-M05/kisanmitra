@@ -8,6 +8,7 @@ It is responsible for:
 3. Including all the necessary route handlers (like the Webhook for WhatsApp).
 4. Providing a global exception handler to gracefully catch unhandled errors and avoid silent crashes.
 """
+import asyncio
 import logging
 from contextlib import asynccontextmanager
 from typing import AsyncGenerator
@@ -15,7 +16,7 @@ from typing import AsyncGenerator
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from backend.core.database import engine
+from backend.core.database import engine, ensure_database_reachable
 from backend.routers import api_router
 from backend.services import ml_service, scheduler
 
@@ -27,18 +28,38 @@ logger = setup_kisanmitra_logging("kisanmitra.api")
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     logger.info("Starting KisanMitra API...")
-    try:
-        import importlib
-        init_db = importlib.import_module("scripts.00_init_db").init_db
-        await init_db()
-        logger.info("Database schema and idempotency indexes verified ✓")
-    except Exception as e:
-        logger.error(f"Database initialization warning: {e}")
 
-    try:
-        ml_service.load_model()
-    except Exception as e:
-        logger.error(f"Failed to load ML model: {e}")
+    # Serve first, warm up in the background. On Render free (0.1 CPU) a
+    # synchronous 57 MB unpickle before the port answers can overrun the
+    # health-check window and fail the deploy, so schema init and model load
+    # run as background tasks. /health returns 200 with model_loaded:false and
+    # /predict answers 503 until they finish — a cold start is degraded, not
+    # down.
+    async def _bootstrap_database() -> None:
+        if not await ensure_database_reachable():
+            logger.warning("Database not reachable at startup; will retry on demand.")
+            return
+        try:
+            import importlib
+            init_db = importlib.import_module("scripts.00_init_db").init_db
+            await init_db()
+            logger.info("Database schema and idempotency indexes verified ✓")
+        except Exception as e:
+            logger.error(f"Database initialization warning: {e}")
+
+    async def _bootstrap_model() -> None:
+        loop = asyncio.get_running_loop()
+        try:
+            # joblib unpickling is blocking CPU work; run it off the event loop
+            # so the server keeps accepting health probes while it loads.
+            await loop.run_in_executor(None, ml_service.load_model)
+        except Exception as e:
+            logger.error(f"Failed to load ML model: {e}")
+
+    warmup_tasks = [
+        asyncio.create_task(_bootstrap_database(), name="startup-db"),
+        asyncio.create_task(_bootstrap_model(), name="startup-model"),
+    ]
 
     # Scheduled AGMARKNET ingest. The freshness gate in price_service is only
     # meaningful if something keeps the feed current, so it starts with the app
@@ -48,6 +69,9 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     yield
 
     logger.info("Shutting down KisanMitra API...")
+    for task in warmup_tasks:
+        if not task.done():
+            task.cancel()
     await scheduler.stop_refresh_task(refresh_task)
     await engine.dispose()
 

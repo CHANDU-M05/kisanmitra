@@ -19,7 +19,7 @@ async def root() -> dict:
         "name":    "KisanMitra API",
         "version": "2.0.0",
         "db":      "PostgreSQL + PostGIS + pgvector",
-        "model":   ml_service.MODEL is not None,
+        "model":   ml_service.model_loaded(),
     }
 
 
@@ -44,7 +44,7 @@ async def health(db: AsyncSession = Depends(get_db)) -> dict:
     except Exception:
         db_ok = False
 
-    model_ok = ml_service.MODEL is not None
+    model_ok = ml_service.model_loaded()
     overall_healthy = db_ok and model_ok
 
     # Feed age is reported separately from db_ok: a reachable database holding
@@ -55,6 +55,11 @@ async def health(db: AsyncSession = Depends(get_db)) -> dict:
         "status": "healthy" if overall_healthy else "degraded",
         "database_connected": db_ok,
         "model_loaded": model_ok,
+        # model_status distinguishes a transient cold-start ("loading", retry
+        # shortly) from a real failure ("failed"), which /health consumers need
+        # to decide whether to back off or alert.
+        "model_status": ml_service.MODEL_STATUS,
+        "model_detail": ml_service.MODEL_STATUS_DETAIL,
         "features": len(ml_service.FEATURES) if model_ok else 0,
         "declarations": decl_count,
         "latest_price_date": latest_date_str,

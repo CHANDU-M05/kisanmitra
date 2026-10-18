@@ -139,7 +139,7 @@ async def _freshness_refusal(
 
 async def get_price_forecast(crop: str, district: str, db: AsyncSession) -> dict:
     if ml_service.MODEL is None:
-        return {"type": "error", "detail": "Model not loaded. Run scripts/03_train_model.py first."}
+        return {"type": "error", "detail": ml_service.unavailable_detail()}
 
     c_pattern = f"%{crop.split()[0]}%"
     d_targets = _DISTRICT_ALIASES.get(district, [district, district[:5]])
@@ -292,7 +292,13 @@ async def _predict_tail(
     X = await ml_service.build_features(
         current_price, arrivals, date.today().month, crop, market, db
     )
-    pred_res = ml_service.make_prediction(X, current_price, commodity=crop)
+    try:
+        pred_res = ml_service.make_prediction(X, current_price, commodity=crop)
+    except ValueError as exc:
+        # The 5x sanity guard refusing to publish an implausible forecast is a
+        # domain outcome the caller can act on, not a server fault: surface the
+        # reason through the standard error path (HTTP 503) instead of a bare 500.
+        return {"type": "error", "detail": str(exc)}
     pred = pred_res["pred"]
     low  = pred_res["low"]
     high = pred_res["high"]
@@ -350,7 +356,7 @@ async def get_market_forecast(
     explicitly labelled what-if scenario, never as a verified observation.
     """
     if ml_service.MODEL is None:
-        return {"type": "error", "detail": "Model not loaded. Run scripts/03_train_model.py first."}
+        return {"type": "error", "detail": ml_service.unavailable_detail()}
 
     c_pattern = f"%{crop.split()[0]}%"
     price_cols = (MandiPrice.modal_price, MandiPrice.arrival_date, MandiPrice.market,
