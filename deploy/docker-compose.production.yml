@@ -1,0 +1,238 @@
+# KisanMitra production stack.
+#
+# Always invoked through deploy/scripts/deploy.sh, which supplies:
+#   --env-file /opt/kisanmitra/.env.production   (secrets and settings; never committed)
+#   --env-file /opt/kisanmitra/.release.env      (IMAGE_PREFIX and RELEASE_TAG for the active release)
+#
+# Environment variable names in .env.production MUST match what the backend
+# Settings class (pydantic-settings) reads. Verified names:
+#   DB_HOST, DB_PORT, DB_NAME, DB_USER, DB_PASSWORD, DB_SQL_ECHO
+#   SECRET_KEY, CORS_ORIGINS, APP_ENV, APP_PORT
+#   GEMINI_API_KEY, WHATSAPP_TOKEN, WHATSAPP_PHONE_NUMBER_ID,
+#   WHATSAPP_VERIFY_TOKEN, WHATSAPP_APP_SECRET, DATA_GOV_API_KEY
+#   REFRESH_ENABLED, REFRESH_INTERVAL_HOURS, REFRESH_LOOKBACK_DAYS, REFRESH_STATE
+#   REDIS_URL (read by telegram_bot and any service that uses redis directly)
+
+name: kisanmitra
+
+# YAML anchor for the two identical API replicas
+x-api-common: &api-common
+  image: ${IMAGE_PREFIX}/backend:${RELEASE_TAG}
+  # "always" in production; "missing" allows air-gapped or local-validation
+  # runs to reuse images already present on the host (override via PULL_POLICY).
+  pull_policy: ${PULL_POLICY:-always}
+  restart: unless-stopped
+  env_file:
+    # Server default; overridable via APP_ENV_FILE for local validation
+    # (docker compose config) without creating /opt/kisanmitra on a dev host.
+    - path: ${APP_ENV_FILE:-/opt/kisanmitra/.env.production}
+      required: true
+  environment:
+    # Overrides from compose; all other settings come from .env.production
+    WEB_CONCURRENCY: ${API_WORKERS:-2}
+    TZ: Asia/Kolkata
+    APP_MODULE: backend.main:app
+    # Pool sizing budget for the Oracle Always Free shape (2 OCPU / 12 GB, shape
+    # halved from 4/24 in July 2026). With DB_POOL_SIZE=10 + DB_MAX_OVERFLOW=20:
+    #   (10 + 20) x 2 workers x 2 replicas = 120 < postgres max_connections=200 ✓
+    DB_POOL_SIZE: ${DB_POOL_SIZE:-10}
+    DB_MAX_OVERFLOW: ${DB_MAX_OVERFLOW:-20}
+    # Trained model artifacts are git-ignored and never baked into images;
+    # the server bind-mounts them read-only (one-time scp, see the runbook).
+    MODEL_DIR: ${MODEL_CONTAINER_PATH:-/var/lib/kisanmitra/models}
+  depends_on:
+    postgres:
+      condition: service_healthy
+    redis:
+      condition: service_healthy
+  healthcheck:
+    test:
+      - CMD
+      - python
+      - -c
+      - "import sys, urllib.request; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:8000${API_HEALTH_PATH:-/health}', timeout=3).status == 200 else 1)"
+    interval: 10s
+    timeout: 5s
+    retries: 5
+    start_period: 60s
+  volumes:
+    # Shared lock volume so fcntl.flock in /internal/sync works across both replicas.
+    # The container reads KISANMITRA_LOCK_DIR (set to /var/lib/kisanmitra/locks in
+    # backend.Dockerfile and honoured by backend.core.config.Settings.lock_dir).
+    - api_locks:/var/lib/kisanmitra/locks
+    - ${MODELS_HOST_DIR:-/var/lib/kisanmitra/data/models}:${MODEL_CONTAINER_PATH:-/var/lib/kisanmitra/models}:ro
+  networks:
+    - app
+  mem_limit: ${API_MEM_LIMIT:-3g}
+  stop_grace_period: 40s
+  security_opt:
+    - no-new-privileges:true
+  logging:
+    driver: json-file
+    options:
+      max-size: "10m"
+      max-file: "3"
+
+services:
+  api-a:
+    <<: *api-common
+
+  api-b:
+    <<: *api-common
+
+  edge:
+    image: ${IMAGE_PREFIX}/edge:${RELEASE_TAG}
+    pull_policy: ${PULL_POLICY:-always}
+    restart: unless-stopped
+    environment:
+      DOMAIN: ${DOMAIN}
+      ACME_EMAIL: ${ACME_EMAIL}
+      API_HEALTH_PATH: ${API_HEALTH_PATH:-/health}
+    ports:
+      - "80:80"
+      - "443:443"
+      - "443:443/udp"
+    volumes:
+      - caddy_data:/data
+      - caddy_config:/config
+    depends_on:
+      api-a:
+        condition: service_healthy
+      api-b:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -O /dev/null http://127.0.0.1:2019/config/ || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 15s
+    networks:
+      - app
+    security_opt:
+      - no-new-privileges:true
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  postgres:
+    image: pgvector/pgvector:pg16
+    container_name: kisanmitra-postgres
+    restart: unless-stopped
+    shm_size: 1g
+    environment:
+      POSTGRES_USER: ${DB_USER}
+      POSTGRES_PASSWORD: ${DB_PASSWORD}
+      POSTGRES_DB: ${DB_NAME}
+      TZ: Asia/Kolkata
+    command:
+      - postgres
+      - -c
+      - shared_buffers=${PG_SHARED_BUFFERS:-2GB}
+      - -c
+      - effective_cache_size=${PG_EFFECTIVE_CACHE_SIZE:-6GB}
+      - -c
+      - work_mem=16MB
+      - -c
+      - maintenance_work_mem=512MB
+      - -c
+      - max_connections=200
+      - -c
+      - wal_compression=on
+      - -c
+      - max_wal_size=2GB
+      - -c
+      - checkpoint_completion_target=0.9
+      - -c
+      - random_page_cost=1.1
+      - -c
+      - log_min_duration_statement=500
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      # Expanded inside the container, where only POSTGRES_* names exist.
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 20s
+    networks:
+      - app
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  redis:
+    image: redis:7-alpine
+    container_name: kisanmitra-redis
+    restart: unless-stopped
+    environment:
+      # Needed at runtime by the healthcheck below ($${REDIS_PASSWORD} is
+      # expanded inside the container, not by compose interpolation).
+      REDIS_PASSWORD: ${REDIS_PASSWORD}
+    # volatile-lru: only keys WITH a TTL are evictable.
+    # JWT blocklist and bot FSM keys carry TTLs, so they evict safely.
+    # Permanent keys (if any) are never dropped.
+    command:
+      - redis-server
+      - --appendonly
+      - "yes"
+      - --maxmemory
+      - ${REDIS_MAXMEMORY:-512mb}
+      - --maxmemory-policy
+      - volatile-lru
+      - --requirepass
+      - ${REDIS_PASSWORD}
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD-SHELL", "redis-cli -a \"$${REDIS_PASSWORD}\" --no-auth-warning ping | grep -q PONG"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+    networks:
+      - app
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  n8n:
+    image: ${N8N_IMAGE:-docker.n8n.io/n8nio/n8n:latest}
+    restart: unless-stopped
+    environment:
+      N8N_ENCRYPTION_KEY: ${N8N_ENCRYPTION_KEY}
+      N8N_HOST: ${DOMAIN}
+      N8N_PROTOCOL: https
+      GENERIC_TIMEZONE: Asia/Kolkata
+      TZ: Asia/Kolkata
+    # Deliberately NOT published publicly. Access via SSH tunnel:
+    #   ssh -L 5678:127.0.0.1:5678 deploy@<server>
+    # Host port is parameterised so it can avoid conflicts on shared hosts.
+    ports:
+      - "127.0.0.1:${N8N_HOST_PORT:-5678}:5678"
+    volumes:
+      - n8n_data:/home/node/.n8n
+    networks:
+      - app
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+networks:
+  app:
+    driver: bridge
+
+volumes:
+  postgres_data:
+  redis_data:
+  n8n_data:
+  caddy_data:
+  caddy_config:
+  api_locks:
