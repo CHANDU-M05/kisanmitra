@@ -237,7 +237,14 @@ Turn the pinger on the morning of the demo, off afterwards — do not run it
   bot does **not** run on this stack. Run it locally for the demo
   (`python -m telegram_bot.bot`, polling mode — no public URL needed), or on
   any always-on host. It talks to the Render API through the same
-  `backend_client`, so a live demo from your laptop works.
+  `backend_client`, so a live demo from your laptop works. Cold starts are
+  absorbed: `send_to_engine` waits 45 s per attempt (`BACKEND_TIMEOUT`) and
+  retries **once** after 3 s on timeout — the first (timed-out) attempt wakes
+  Render, so the retry lands on a live instance and the farmer gets a real
+  answer ~50 s late instead of an error. Before a demo, open
+  `https://<service>.onrender.com/health` in a browser about **two minutes
+  ahead**: that pays the cold start (model-ready is ~68 s at 0.1 CPU) so the
+  first spoken question is not the one that warms the server.
 - **n8n:** does not fit free tiers at all (needs an always-on container). The
   in-process AGMARKNET scheduler replaces it here: `REFRESH_ENABLED=true`,
   every 6 h, and it **catches up on boot if the feed is stale**, so a service
