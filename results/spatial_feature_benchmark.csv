@@ -1,0 +1,7 @@
+Experiment,MAPE (%),Median MAPE (%),MAE (₹/q),RMSE (₹/q),R2,Directional Acc (%),Fit Time (s)
+D0: CatBoost Baseline (No Spatial),35.87,27.39,707.55,1117.25,0.0141,65.75,6.44
+D1: CatBoost + Spatial Features,35.86,27.32,704.47,1107.86,0.0306,65.43,7.9
+D0: LightGBM Baseline (No Spatial),37.0,27.95,718.53,1122.52,0.0048,65.52,2.08
+D2: LightGBM + Spatial Features,37.02,28.01,719.9,1119.67,0.0099,65.03,2.1
+RF Baseline (No Spatial),38.8,28.71,737.35,1137.18,-0.0213,65.24,19.12
+RF + Spatial Features,39.58,28.61,739.31,1135.67,-0.0186,64.93,40.41

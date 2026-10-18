@@ -1,0 +1,5 @@
+Model,MAPE (%),Median MAPE (%),MAE (₹/q),RMSE (₹/q),R2,Directional Acc (%),Fit Time (s)
+Random Forest (M5 Baseline),38.86,28.75,738.57,1138.91,-0.0236,65.2,24.39
+HistGradientBoosting,36.19,27.66,710.86,1118.54,0.0127,65.5,3.86
+LightGBM,36.68,27.88,717.78,1123.25,0.0044,65.59,2.98
+CatBoost,35.73,27.38,707.3,1117.75,0.0141,65.67,8.34

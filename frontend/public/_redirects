@@ -1,0 +1,5 @@
+# Cloudflare Pages — SPA fallback.
+# The React app does client-side routing; any unknown path must return the app
+# shell so deep links and refreshes work. This must be a 200 (rewrite), not a
+# 308/301 redirect, so the router sees the original path.
+/*    /index.html   200

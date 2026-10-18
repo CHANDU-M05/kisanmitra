@@ -1,0 +1,14 @@
+[Unit]
+Description=Twice-daily KisanMitra AGMARKNET refresh
+
+[Timer]
+# Mandi arrivals are reported through the day; 06:30 picks up yesterday's
+# sessions, 18:30 picks up today's. Persistent=true runs a catch-up refresh
+# immediately after boot if a window was missed while the host was down.
+OnCalendar=*-*-* 06:30:00 Asia/Kolkata
+OnCalendar=*-*-* 18:30:00 Asia/Kolkata
+Persistent=true
+RandomizedDelaySec=180
+
+[Install]
+WantedBy=timers.target

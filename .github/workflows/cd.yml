@@ -1,0 +1,198 @@
+name: Continuous Deployment
+
+# Deploy target switch. This workflow builds and SSH-deploys the ORACLE stack
+# only. The current free-tier deployment (Render + Neon + Cloudflare Pages) is
+# driven by render.yaml and the Pages build — it needs none of the jobs below,
+# and they would fail here for lack of an SSH server until one exists.
+# Enable Oracle deploys explicitly:
+#   gh variable set DEPLOY_TARGET --body oracle
+# While the variable is unset or not "oracle", every job below is skipped and
+# pushes to main finish green with no deploy attempts.
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      image_tag:
+        description: "Existing GHCR tag to deploy (leave blank to build new)"
+        required: false
+        default: ""
+
+concurrency:
+  group: production-deploy
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+  packages: write
+  id-token: write
+
+jobs:
+  # ── Gate: run the full CI pipeline before touching production ──────────────
+  # Skipped only for a manual redeploy of an EXISTING tag (incident response:
+  # the exact image already passed CI when it was first built and pushed).
+  ci-gate:
+    name: CI gate
+    if: ${{ vars.DEPLOY_TARGET == 'oracle' && inputs.image_tag == '' }}
+    uses: ./.github/workflows/ci.yml
+    secrets: inherit
+
+  # ── Prepare: resolve image prefix and release tag ─────────────────────────
+  prepare:
+    name: Prepare release metadata
+    runs-on: ubuntu-24.04
+    needs: ci-gate
+    # Proceed when CI passed OR was intentionally skipped (tagged redeploy);
+    # a failed or cancelled CI gate must never reach deploy.
+    if: |
+      always() &&
+      vars.DEPLOY_TARGET == 'oracle' &&
+      (needs.ci-gate.result == 'success' || needs.ci-gate.result == 'skipped')
+    outputs:
+      image_prefix: ${{ steps.resolve.outputs.image_prefix }}
+      release_tag: ${{ steps.resolve.outputs.release_tag }}
+      build_required: ${{ steps.resolve.outputs.build_required }}
+    steps:
+      - name: Resolve image prefix and tag
+        id: resolve
+        env:
+          GITHUB_REPOSITORY: ${{ github.repository }}
+          INPUT_TAG: ${{ inputs.image_tag }}
+          SHA: ${{ github.sha }}
+        run: |
+          # GHCR requires the repository path to be fully lowercase.
+          IMAGE_PREFIX="ghcr.io/$(echo "${GITHUB_REPOSITORY}" | tr '[:upper:]' '[:lower:]')"
+          echo "image_prefix=${IMAGE_PREFIX}" >> "$GITHUB_OUTPUT"
+
+          if [[ -n "${INPUT_TAG}" ]]; then
+            echo "release_tag=${INPUT_TAG}" >> "$GITHUB_OUTPUT"
+            echo "build_required=false" >> "$GITHUB_OUTPUT"
+          else
+            # 12-character commit tag for traceability
+            RELEASE_TAG="${SHA:0:12}"
+            echo "release_tag=${RELEASE_TAG}" >> "$GITHUB_OUTPUT"
+            echo "build_required=true" >> "$GITHUB_OUTPUT"
+          fi
+
+  # ── Build and push multi-arch images ──────────────────────────────────────
+  build-push:
+    name: Build and push (${{ matrix.image }})
+    runs-on: ubuntu-24.04
+    needs: prepare
+    if: needs.prepare.outputs.build_required == 'true'
+    strategy:
+      fail-fast: false
+      matrix:
+        image: [backend, edge]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up QEMU (for ARM64 cross-compilation)
+        uses: docker/setup-qemu-action@v3
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push ${{ matrix.image }}
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: deploy/docker/${{ matrix.image }}.Dockerfile
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: |
+            ${{ needs.prepare.outputs.image_prefix }}/${{ matrix.image }}:${{ needs.prepare.outputs.release_tag }}
+            ${{ needs.prepare.outputs.image_prefix }}/${{ matrix.image }}:latest
+          cache-from: type=gha,scope=${{ matrix.image }}
+          cache-to: type=gha,mode=max,scope=${{ matrix.image }}
+
+  # ── Deploy to production ───────────────────────────────────────────────────
+  deploy:
+    name: Deploy to production
+    runs-on: ubuntu-24.04
+    needs: [prepare, build-push]
+    # Run if build-push succeeded OR was skipped (redeploy of existing tag)
+    if: |
+      always() &&
+      needs.prepare.result == 'success' &&
+      (needs.build-push.result == 'success' || needs.build-push.result == 'skipped')
+    environment:
+      name: production
+      url: https://${{ vars.PRODUCTION_DOMAIN }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Configure SSH
+        env:
+          SSH_KEY: ${{ secrets.PRODUCTION_SSH_KEY }}
+          KNOWN_HOSTS: ${{ secrets.PRODUCTION_SSH_KNOWN_HOSTS }}
+        run: |
+          install -m 700 -d "$HOME/.ssh"
+          printf '%s\n' "$SSH_KEY" > "$HOME/.ssh/deploy_key"
+          chmod 600 "$HOME/.ssh/deploy_key"
+          printf '%s\n' "$KNOWN_HOSTS" > "$HOME/.ssh/known_hosts"
+
+      - name: Sync deployment files to server
+        env:
+          HOST: ${{ secrets.PRODUCTION_HOST }}
+          DEPLOY_USER: ${{ secrets.PRODUCTION_USER }}
+        run: |
+          rsync -az --mkpath \
+            -e "ssh -i $HOME/.ssh/deploy_key -o BatchMode=yes" \
+            deploy/docker-compose.production.yml \
+            deploy/scripts/ \
+            deploy/caddy/ \
+            "${DEPLOY_USER}@${HOST}:/opt/kisanmitra/deploy/"
+          ssh -i "$HOME/.ssh/deploy_key" -o BatchMode=yes "${DEPLOY_USER}@${HOST}" \
+            "chmod +x /opt/kisanmitra/deploy/scripts/*.sh"
+
+      - name: Roll out release
+        env:
+          HOST: ${{ secrets.PRODUCTION_HOST }}
+          DEPLOY_USER: ${{ secrets.PRODUCTION_USER }}
+          GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          ACTOR: ${{ github.actor }}
+          IMAGE_PREFIX: ${{ needs.prepare.outputs.image_prefix }}
+          RELEASE_TAG: ${{ needs.prepare.outputs.release_tag }}
+          SKIP_MIGRATIONS: ${{ needs.prepare.outputs.build_required == 'false' && 'true' || 'false' }}
+        run: |
+          printf '%s' "$GHCR_TOKEN" | \
+            ssh -i "$HOME/.ssh/deploy_key" -o BatchMode=yes "${DEPLOY_USER}@${HOST}" \
+            "GHCR_USER='${ACTOR}' IMAGE_PREFIX='${IMAGE_PREFIX}' RELEASE_TAG='${RELEASE_TAG}' SKIP_MIGRATIONS='${SKIP_MIGRATIONS}' bash /opt/kisanmitra/deploy/scripts/deploy.sh deploy"
+
+      - name: Verify public endpoints
+        id: verify
+        env:
+          DOMAIN: ${{ vars.PRODUCTION_DOMAIN }}
+          HEALTH_PATH: ${{ vars.API_HEALTH_PATH || '/health' }}
+        run: |
+          echo "Waiting for production to become healthy..."
+          for attempt in $(seq 1 20); do
+            if curl -fsS --max-time 10 "https://${DOMAIN}/api${HEALTH_PATH}" > /dev/null \
+              && curl -fsS --max-time 10 "https://${DOMAIN}/" > /dev/null; then
+              echo "Production is healthy after ${attempt} attempt(s)"
+              exit 0
+            fi
+            echo "Attempt ${attempt}/20 failed; waiting 6s..."
+            sleep 6
+          done
+          echo "Public endpoint verification failed after all attempts"
+          exit 1
+
+      - name: Roll back after failed verification
+        if: failure() && steps.verify.outcome == 'failure'
+        env:
+          HOST: ${{ secrets.PRODUCTION_HOST }}
+          DEPLOY_USER: ${{ secrets.PRODUCTION_USER }}
+        run: |
+          echo "Initiating rollback..."
+          ssh -i "$HOME/.ssh/deploy_key" -o BatchMode=yes "${DEPLOY_USER}@${HOST}" \
+            "bash /opt/kisanmitra/deploy/scripts/deploy.sh rollback"

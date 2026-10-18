@@ -1,0 +1,5 @@
+Model,Global MAPE (%),Global Med MAPE (%),Global MAE (₹/q),R2,Coverage (%),Pinball L50,Crash MAE (₹/q),Crash MAPE (%),Crash Signed Err (₹/q),Crash Overpred Rate (%),Fit Time (s)
+D4-A: Standard RMSE (D3 Control),35.35,27.05,702.26,0.0245,34.2,351.13,475.59,49.58,193.32,68.62,8.54
+D4-B: Quantile Q15 (Lower Bound),45.6,43.77,1038.51,-0.7012,6.57,519.26,485.67,35.49,-407.18,19.23,11.77
+D4-C: Quantile Q50 (Median Forecast),34.6,28.66,747.48,-0.1224,26.2,373.74,408.6,40.07,45.09,59.75,11.83
+D4-D: Quantile Q85 (Upper Bound),47.25,27.87,710.26,0.1718,60.98,355.13,812.78,88.98,715.01,88.95,11.37

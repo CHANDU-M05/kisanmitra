@@ -1,17 +1,16 @@
 {
-  "version": "1.0.0",
-  "commodity": "Tomato",
-  "markets": [
-    "Kolar",
-    "Chikkaballapur"
-  ],
-  "horizon": "60 days",
-  "algorithm": "RandomForestRegressor",
+  "version": "3.0.0",
+  "project": "KisanMitra Market Price Forecasting",
+  "evaluation_period": "2021-08-24 to 2026-08-05",
+  "test_set_size": 44572,
+  "horizon_days": 60,
   "features": [
+    "commodity_encoded",
+    "market_encoded",
     "month",
     "month_sin",
     "month_cos",
-    "season",
+    "season_encoded",
     "quarter",
     "modal_price",
     "price_7d_avg",
@@ -21,9 +20,71 @@
     "price_trend_7d",
     "vs_seasonal",
     "seasonal_avg",
-    "arrivals_tonnes",
-    "arrivals_7d_avg"
+    "days_since_last_report"
   ],
-  "test_mape": 17.5,
-  "test_r2": 0.443
+  "primary_point_model": {
+    "algorithm": "CatBoostRegressor",
+    "loss_function": "RMSE",
+    "feature_groups": ["baseline", "spatial", "weather"],
+    "total_features": 36,
+    "test_mape": 35.35,
+    "test_median_mape": 27.05,
+    "test_mae": 702.26,
+    "test_r2": 0.0245,
+    "directional_accuracy": 65.50
+  },
+  "primary_median_model": {
+    "algorithm": "CatBoostRegressor",
+    "loss_function": "Quantile:alpha=0.50",
+    "feature_groups": ["baseline", "spatial", "weather"],
+    "total_features": 36,
+    "test_mape": 34.60,
+    "test_median_mape": 28.66,
+    "test_mae": 747.48,
+    "crash_subset_metrics": {
+      "crash_mae": 408.60,
+      "crash_mape": 40.07,
+      "crash_signed_error": 45.09,
+      "crash_mae_relative_improvement_pct": 14.1,
+      "crash_overprediction_bias_reduction_pct": 76.7
+    }
+  },
+  "lower_tail_risk_model": {
+    "algorithm": "CatBoostRegressor",
+    "loss_function": "Quantile:alpha=0.15",
+    "train_calibration_coverage": 14.94,
+    "note": "Functions as a conservative lower-tail risk estimate for post-harvest collapse prevention."
+  },
+  "ablation_ladder": [
+    { "stage": "M5 Baseline", "model": "RandomForestRegressor", "mape": 38.86, "mae": 738.57, "r2": -0.0236 },
+    { "stage": "Stage A", "model": "CatBoost Baseline", "mape": 35.73, "mae": 707.30, "r2": 0.0141 },
+    { "stage": "Stage D1", "model": "CatBoost + Spatial", "mape": 35.86, "mae": 704.47, "r2": 0.0306 },
+    { "stage": "Stage D3", "model": "CatBoost + Spatial + Weather", "mape": 35.35, "mae": 702.26, "r2": 0.0245 },
+    { "stage": "Stage D4 (Q50)", "model": "CatBoost Q50 Median", "mape": 34.60, "mae": 747.48, "r2": -0.1224 }
+  ],
+  "crop_mape": {
+    "Maize": 20.13,
+    "Ragi (Finger Millet)": 21.05,
+    "Potato": 23.38,
+    "Onion": 36.86,
+    "Brinjal": 44.06,
+    "Tomato": 47.46
+  },
+  "crop_median_mape": {
+    "Potato": 18.06,
+    "Maize": 20.86,
+    "Ragi (Finger Millet)": 22.07,
+    "Onion": 27.75,
+    "Brinjal": 37.11,
+    "Tomato": 39.92
+  },
+  "crop_msp": {
+    "Maize": 2400.0,
+    "Ragi": 4886.0,
+    "Brinjal": null,
+    "Potato": null,
+    "Tomato": null,
+    "Onion": null,
+    "Marigold": null
+  }
 }
