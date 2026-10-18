@@ -32,7 +32,10 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     PATH="/opt/venv/bin:${PATH}" \
     # Overridable at deploy time via docker-compose environment:
     APP_MODULE="backend.main:app" \
-    WEB_CONCURRENCY=2 \
+    # Default to a single worker: Render's free 512 MB / 0.1 CPU plan cannot
+    # afford the ~350 MB-per-worker model footprint at WEB_CONCURRENCY=2. The
+    # Oracle/compose stack overrides this to 2 via its environment.
+    WEB_CONCURRENCY=1 \
     # Shared lock path for multi-container flock synchronisation.
     # Must match the volume mount in docker-compose.production.yml.
     KISANMITRA_LOCK_DIR="/var/lib/kisanmitra/locks" \
@@ -61,7 +64,7 @@ EXPOSE 8000
 CMD ["sh", "-c", \
      "exec gunicorn ${APP_MODULE} \
         -k uvicorn.workers.UvicornWorker \
-        --bind 0.0.0.0:8000 \
+        --bind 0.0.0.0:${PORT:-8000} \
         --workers ${WEB_CONCURRENCY} \
         --timeout 120 \
         --graceful-timeout 30 \
