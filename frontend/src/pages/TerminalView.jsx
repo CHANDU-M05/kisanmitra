@@ -5,6 +5,12 @@ import { ShieldAlert, TrendingDown, Thermometer, HelpCircle, Layers, CheckCircle
 
 import Card from '../components/ui/Card';
 import { API } from '../config';
+import {
+  buildChartData,
+  deriveForecastView,
+  feedBanner,
+  latestHistoricalPrice,
+} from '../forecastState';
 
 // ---- Reliability / simulation theme, single source of truth ----------
 // Thresholds live here ONCE. Previously duplicated in the Row 3 tier badge
@@ -21,6 +27,14 @@ const RELIABILITY_TIERS = [
 const SIMULATION_THEME = {
   color: '#d97706', gradient: ['#d97706', '#f59e0b'], dash: '3 3',
   badge: 'bg-amber-50 text-amber-700 border border-amber-200 dark:bg-amber-500/10 dark:text-amber-400 dark:border-amber-500/20',
+};
+
+// No forecast means no measured accuracy either. Claiming "HIGH RELIABILITY" for
+// a market we cannot price is exactly the kind of confident-but-wrong display
+// this screen used to produce, so accuracy-less states get their own label.
+const UNKNOWN_THEME = {
+  color: '#64748b', gradient: ['#64748b', '#94a3b8'], dash: '2 4', label: 'NO ACCURACY DATA',
+  badge: 'bg-slate-100 text-slate-600 border border-slate-300 dark:bg-slate-500/10 dark:text-slate-400 dark:border-slate-500/20',
 };
 
 // ── Confidence band: drawn as a proper SVG polygon via Recharts Customized ──
@@ -111,16 +125,18 @@ const ConfidenceBandLayer = React.memo(function ConfidenceBandLayer(props) {
 
 function getTheme(mapePct, isSimulated) {
   if (isSimulated) return SIMULATION_THEME;
-  const tier = RELIABILITY_TIERS.find(t => (mapePct ?? 0) < t.max) ?? RELIABILITY_TIERS[RELIABILITY_TIERS.length - 1];
+  if (mapePct == null) return { ...UNKNOWN_THEME };
+  const tier = RELIABILITY_TIERS.find(t => mapePct < t.max) ?? RELIABILITY_TIERS[RELIABILITY_TIERS.length - 1];
   return { ...tier };
 }
 
 function getReliabilityLabel(mapePct) {
+  if (mapePct == null) return UNKNOWN_THEME.label;
   const tier = RELIABILITY_TIERS.find(t => mapePct < t.max) ?? RELIABILITY_TIERS[RELIABILITY_TIERS.length - 1];
   return tier.label;
 }
 
-const formatINR = (value) => `₹${Math.round(value).toLocaleString('en-IN')}`;
+const formatINR = (value) => (value == null ? '—' : `₹${Math.round(value).toLocaleString('en-IN')}`);
 
 function getEnvLabel(val) {
   if (val < -15) return 'Severe Drought';
@@ -137,21 +153,28 @@ export default function TerminalView() {
   const [marketsList, setMarketsList] = useState(['Kolar', 'Belagavi', 'Chikkaballapur', 'Dharwad', 'Mysuru']);
 
 
-  const [trend, setTrend] = useState('NEUTRAL');
-  const [recommendation, setRecommendation] = useState('MONITOR WEEKLY — BALANCED STATE');
-  const [forecastTarget, setForecastTarget] = useState(1400);
+  // One object describes what the server actually returned. Every
+  // forecast-derived number below is read from it, so a stale or missing market
+  // cannot leave a previous crop's prediction on screen or render a null as ₹0.
+  const [forecastView, setForecastView] = useState(deriveForecastView(null));
 
   const [envDeviation, setEnvDeviation] = useState(0);
   const [subsidyLevel, setSubsidyLevel] = useState('Normalized');
 
   const [historicalData, setHistoricalData] = useState([]);
-  const [forecastPricePoint, setForecastPricePoint] = useState(1400);
-  const [confidenceHigh, setConfidenceHigh] = useState(1600);
-  const [confidenceLow, setConfidenceLow] = useState(1200);
-  const [cropMeta, setCropMeta] = useState({ crop_mape_pct: null, msp_floor: null, msp_ratio: null });
 
-  const [capacity, setCapacity] = useState({ filled: 0, total: 175.0, percentage: 0 });
+  // Backend-supplied, never a local constant: `total` is the reference acreage
+  // the saturation percentage was measured against, and is null until loaded.
+  const [capacity, setCapacity] = useState({ filled: null, total: null, percentage: null, basis: null });
   const [computedData, setComputedData] = useState([]);
+
+  const trend = forecastView.trend;
+  const anomalyMeta = forecastView.anomaly;
+  const cropMeta = forecastView.cropMeta;
+  const forecastPricePoint = forecastView.predicted;
+  const forecastTarget = forecastView.predicted;
+  const confidenceHigh = forecastView.high;
+  const confidenceLow = forecastView.low;
 
   const isAdmin = localStorage.getItem('role') === 'admin' && localStorage.getItem('auth_token') !== null;
 
@@ -169,111 +192,66 @@ export default function TerminalView() {
       .catch(err => console.error("Error fetching crops-markets stats on mount", err));
   }, []);
 
-  const [anomalyMeta, setAnomalyMeta] = useState({ is_anomaly: false, deviation_pct: 0, anomaly_type: 'NORMAL' });
-
   useEffect(() => {
+    let cancelled = false;
+    // Reset first: a stale or empty market must never keep showing the previous
+    // selection's prediction while the new request is in flight.
+    setForecastView({ ...deriveForecastView(null), state: 'loading' });
+
     fetch(`${API}/prices/history/${selectedMarket}/${selectedCrop}`)
       .then(res => res.json())
       .then(history => {
-        if (!Array.isArray(history) || history.length === 0) return;
+        if (cancelled) return;
+        if (!Array.isArray(history) || history.length === 0) {
+          // The endpoint used to answer "no rows" with a fabricated seasonal
+          // series and the dashboard read its last point as today's price. An
+          // empty array now means exactly what it says: nothing recorded.
+          setHistoricalData([]);
+          setForecastView(deriveForecastView({ type: 'no_data', crop: selectedCrop, market: selectedMarket }));
+          return;
+        }
         setHistoricalData(history);
-        const latestPrice = history[history.length - 1].price;
-
-        fetch(`${API}/prices/predict?commodity=${encodeURIComponent(selectedCrop)}&market=${encodeURIComponent(selectedMarket)}&current_price=${latestPrice}&arrivals_tonnes=100.0`)
+        // No current_price and no arrivals_tonnes in the URL: the backend
+        // resolves the verified mandi price itself and refuses it if too old.
+        return fetch(`${API}/prices/predict?commodity=${encodeURIComponent(selectedCrop)}&market=${encodeURIComponent(selectedMarket)}`)
           .then(res => res.json())
-          .then(pred => {
-            setForecastPricePoint(pred.predicted_price);
-            setForecastTarget(pred.predicted_price);
-            setConfidenceHigh(pred.confidence_high);
-            setConfidenceLow(pred.confidence_low);
-            setCropMeta({
-              crop_mape_pct: pred.crop_mape_pct ?? null,
-              msp_floor: pred.msp_floor ?? null,
-              msp_ratio: pred.msp_ratio ?? null,
-            });
-            if (pred.is_anomaly) {
-              setAnomalyMeta({
-                is_anomaly: pred.is_anomaly,
-                deviation_pct: pred.deviation_pct || 0,
-                anomaly_type: pred.anomaly_type || 'NORMAL',
-              });
-            } else {
-              setAnomalyMeta({ is_anomaly: false, deviation_pct: 0, anomaly_type: 'NORMAL' });
-            }
-
-            if (pred.signal.includes("falling") || pred.signal.includes("FALL")) {
-              setTrend('BEARISH');
-              setRecommendation('HALT PLANTING — CRITICAL OVERSUPPLY IN MARKET');
-            } else if (pred.signal.includes("rising") || pred.signal.includes("WAIT")) {
-              setTrend('BULLISH');
-              setRecommendation('STABLE PATHWAY — SECURE ACREAGE INCREASES');
-            } else {
-              setTrend('NEUTRAL');
-              setRecommendation('MONITOR ACREAGES — MARKET ABSORPTION STABLE');
-            }
-          })
-          .catch(err => console.error("Error predicting price", err));
+          .then(pred => { if (!cancelled) setForecastView(deriveForecastView(pred)); });
       })
-      .catch(err => console.error("Error loading historical prices", err));
+      .catch(err => {
+        console.error("Error loading historical prices", err);
+        if (!cancelled) setForecastView(deriveForecastView(null));
+      });
 
     fetch(`${API}/saturation/${selectedMarket}/${selectedCrop}`)
       .then(res => res.json())
       .then(data => {
+        // The backend already computed saturation against a documented reference
+        // area. Dividing by a hardcoded 175 here produced a second, invented
+        // percentage that matched nothing the bot or API reported.
         setCapacity({
-          filled: data.total_area || 0,
-          total: 175.0,
-          percentage: data.total_area ? Math.round((data.total_area / 175.0) * 100) : 0
+          filled: Number.isFinite(data.total_area) ? data.total_area : null,
+          total: Number.isFinite(data.reference_area_acres) ? data.reference_area_acres : null,
+          percentage: Number.isFinite(data.saturation_pct) ? Math.round(data.saturation_pct) : null,
+          basis: data.reference_basis ?? null,
         });
       })
-      .catch(err => console.error("Error loading saturation metrics", err));
+      .catch(err => {
+        console.error("Error loading saturation metrics", err);
+        setCapacity({ filled: null, total: null, percentage: null, basis: null });
+      });
   }, [selectedCrop, selectedMarket]);
 
   useEffect(() => {
-    if (historicalData.length === 0) return;
+    // The projected spline is drawn only when a real forecast exists; history
+    // alone is still shown, because observed prices remain true when they age.
+    setComputedData(buildChartData(historicalData, forecastView, { envDeviation, subsidyLevel }));
+  }, [envDeviation, subsidyLevel, historicalData, forecastView]);
 
-    const lastHist = historicalData[historicalData.length - 1];
-    const chartData = historicalData.map((item) => ({
-      day: item.date.substring(5),
-      historical: item.price,
-      forecast: null,
-      confidenceHigh: null,
-      confidenceLow: null,
-    }));
-
-    let modifier = 1.0;
-    modifier += (envDeviation * -0.006);
-    if (subsidyLevel === 'Inflation') modifier += 0.12;
-    if (subsidyLevel === 'Relief') modifier -= 0.08;
-
-    const finalPredictedPrice = Math.round(forecastPricePoint * modifier);
-    const finalHigh = Math.round(confidenceHigh * modifier);
-    const finalLow = Math.round(confidenceLow * modifier);
-
-    const steps = 6;
-    const priceStep = (finalPredictedPrice - lastHist.price) / steps;
-
-    chartData[chartData.length - 1].forecast = lastHist.price;
-    chartData[chartData.length - 1].confidenceHigh = lastHist.price;
-    chartData[chartData.length - 1].confidenceLow = lastHist.price;
-
-    for (let i = 1; i <= steps; i++) {
-      const stepPrice = Math.round(lastHist.price + i * priceStep);
-      const progressRatio = i / steps;
-      chartData.push({
-        day: `T+${i * 10}`,
-        historical: null,
-        forecast: stepPrice,
-        confidenceHigh: Math.round(stepPrice + (finalHigh - stepPrice) * progressRatio),
-        confidenceLow: Math.round(stepPrice - (stepPrice - finalLow) * progressRatio),
-      });
-    }
-
-    setComputedData(chartData);
-  }, [envDeviation, subsidyLevel, historicalData, forecastPricePoint, confidenceHigh, confidenceLow]);
-
-  const lastHistoricalPrice = historicalData.length > 0 ? historicalData[historicalData.length - 1].price : 1720;
+  const lastHistoricalPrice = latestHistoricalPrice(historicalData);
   const dynamicT60Price = computedData.find(item => item.day === 'T+60')?.forecast ?? forecastPricePoint;
-  const dynamicNetShift = dynamicT60Price - lastHistoricalPrice;
+  const dynamicNetShift = (dynamicT60Price != null && lastHistoricalPrice != null)
+    ? dynamicT60Price - lastHistoricalPrice
+    : null;
   const isSimulated = envDeviation !== 0 || subsidyLevel !== 'Normalized';
 
   // Fixed: was checking 'Inflationary', which the <select> never actually emits
@@ -292,22 +270,24 @@ export default function TerminalView() {
   );
 
   const banner = useMemo(() => {
-    if (isSimulated) {
-      return {
-        container: 'bg-amber-50 text-amber-700 border border-amber-200 dark:bg-amber-500/10 dark:text-amber-400 dark:border-amber-500/20',
-        icon: <FlaskConical className="h-4 w-4 shrink-0" />,
-        text: `SIMULATED — ${scenarioName.toUpperCase()} · NOT LIVE DATA`,
-      };
-    }
-    switch (trend) {
+    const b = feedBanner(forecastView, {
+      crop: selectedCrop, market: selectedMarket, isSimulated, scenarioName,
+    });
+    switch (b.tone) {
+      case 'unavailable':
+        return { ...b, container: 'bg-slate-100 text-slate-700 border border-slate-300 dark:bg-slate-500/10 dark:text-slate-300 dark:border-slate-500/20', icon: <Info className="h-4 w-4 shrink-0" /> };
+      case 'muted':
+        return { ...b, container: 'bg-slate-50 text-slate-500 border border-slate-200 dark:bg-slate-500/10 dark:text-slate-400 dark:border-slate-500/20', icon: <Info className="h-4 w-4 shrink-0" /> };
+      case 'scenario':
+        return { ...b, container: 'bg-amber-50 text-amber-700 border border-amber-200 dark:bg-amber-500/10 dark:text-amber-400 dark:border-amber-500/20', icon: <FlaskConical className="h-4 w-4 shrink-0" /> };
       case 'BEARISH':
-        return { container: 'bg-red-50 text-red-700 border border-red-200 dark:bg-red-500/10 dark:text-red-400 dark:border-red-500/20', icon: <ShieldAlert className="h-4 w-4 shrink-0" />, text: recommendation };
+        return { ...b, container: 'bg-red-50 text-red-700 border border-red-200 dark:bg-red-500/10 dark:text-red-400 dark:border-red-500/20', icon: <ShieldAlert className="h-4 w-4 shrink-0" /> };
       case 'BULLISH':
-        return { container: 'bg-emerald-50 text-emerald-700 border border-emerald-200 dark:bg-emerald-500/10 dark:text-emerald-450 dark:border-emerald-500/20', icon: <CheckCircle2 className="h-4 w-4 shrink-0" />, text: recommendation };
+        return { ...b, container: 'bg-emerald-50 text-emerald-700 border border-emerald-200 dark:bg-emerald-500/10 dark:text-emerald-450 dark:border-emerald-500/20', icon: <CheckCircle2 className="h-4 w-4 shrink-0" /> };
       default:
-        return { container: 'bg-amber-50 text-amber-700 border border-amber-200 dark:bg-amber-500/10 dark:text-amber-400 dark:border-amber-500/20', icon: <Info className="h-4 w-4 shrink-0" />, text: recommendation };
+        return { ...b, container: 'bg-amber-50 text-amber-700 border border-amber-200 dark:bg-amber-500/10 dark:text-amber-400 dark:border-amber-500/20', icon: <Info className="h-4 w-4 shrink-0" /> };
     }
-  }, [isSimulated, scenarioName, trend, recommendation]);
+  }, [forecastView, isSimulated, scenarioName, selectedCrop, selectedMarket]);
 
   // Stable component ref for Recharts Customized \u2014 recreated only when
   // computedData or theme changes to avoid stale closure over chart data.
@@ -329,7 +309,7 @@ export default function TerminalView() {
         )}
       </div>
 
-      {(anomalyMeta.is_anomaly || Math.abs(envDeviation) >= 30) && (
+      {(anomalyMeta.is_anomaly || Math.abs(envDeviation) >= 30) && forecastView.hasForecast && (
         <div className="bg-amber-500/10 border border-amber-500/30 text-amber-800 dark:text-amber-300 px-4 py-3 rounded-2xl flex items-center justify-between shadow-sm animate-fade-in">
           <div className="flex items-center gap-2.5 text-xs font-bold font-mono">
             <ShieldAlert className="w-4 h-4 text-amber-600 dark:text-amber-400 shrink-0" />
@@ -421,7 +401,44 @@ export default function TerminalView() {
             </div>
           </div>
 
+          {/* Provenance strip: what the numbers on this chart actually are. The
+              forecast is shown only when the server produced one, and the record
+              date is always visible so an old price cannot read as a new one. */}
+          <div className="flex flex-wrap items-center gap-x-4 gap-y-1 mb-2 text-[9px] font-mono font-bold uppercase tracking-wider text-slate-500 dark:text-slate-400">
+            <span>
+              Latest record:{' '}
+              {forecastView.provenance?.price_as_of ?? 'UNAVAILABLE'}
+              {forecastView.provenance?.days_old != null ? ` (${forecastView.provenance.days_old}d old)` : ''}
+            </span>
+            <span>Mandi: {forecastView.provenance?.source_market ?? selectedMarket}</span>
+            <span>
+              Arrivals:{' '}
+              {forecastView.provenance?.arrivals_provenance === 'recorded'
+                ? `${Number(forecastView.provenance?.arrivals_tonnes ?? 0).toLocaleString('en-IN')} t`
+                : (forecastView.provenance?.arrivals_provenance ?? 'unknown').replace('_', ' ')}
+            </span>
+            {forecastView.state === 'stale' && (
+              <span className="text-red-600 dark:text-red-400">
+                Stale — no forecast ({(forecastView.provenance?.stale_reason ?? 'unknown').replace(/_/g, ' ')})
+              </span>
+            )}
+            {(forecastView.provenance?.data_quality ?? []).map(flag => (
+              <span key={flag} className="text-amber-700 dark:text-amber-400">⚠ {flag.replace(/_/g, ' ')}</span>
+            ))}
+          </div>
+
           <div className="flex-1 w-full font-mono text-[10px]" style={{height: 'calc(100% - 60px)'}}>
+            {computedData.length === 0 ? (
+              <div className="h-full flex flex-col items-center justify-center gap-2 text-center px-6">
+                <span className="text-[11px] font-bold uppercase tracking-widest text-slate-600 dark:text-slate-300">
+                  No verified records for {selectedCrop} in {selectedMarket}
+                </span>
+                <span className="text-[10px] leading-relaxed text-slate-500 dark:text-slate-400 max-w-sm">
+                  The chart and forecast stay empty instead of showing estimated prices.
+                  Real rows appear here as soon as the AGMARKNET feed carries this market.
+                </span>
+              </div>
+            ) : (
             <ResponsiveContainer width="100%" height="100%">
               <ComposedChart data={computedData} margin={{ top: 12, right: 16, left: -25, bottom: 0 }}>
                 <defs />
@@ -447,7 +464,9 @@ export default function TerminalView() {
                   }}
                 />
 
-                {/* T+60 reference line */}
+                {/* T+60 reference line — only when a forecast exists, otherwise
+                    this would draw a line at ₹0 across real history. */}
+                {forecastTarget != null && (
                 <ReferenceLine
                   y={forecastTarget}
                   stroke={theme.color}
@@ -460,6 +479,7 @@ export default function TerminalView() {
                     fontSize: 9, fontWeight: 800, fontFamily: 'monospace',
                   }}
                 />
+                )}
 
                 {/* ── Confidence band — stable ref, dark+light safe ── */}
                 <Customized component={bandComponent} />
@@ -491,6 +511,7 @@ export default function TerminalView() {
                 />
               </ComposedChart>
             </ResponsiveContainer>
+            )}
           </div>
         </Card>
 
@@ -546,19 +567,29 @@ export default function TerminalView() {
       <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
         <Card className="space-y-4">
           <div className="flex justify-between items-center">
-            <h4 className="text-xs font-bold uppercase tracking-wider text-slate-700 dark:text-slate-400">Hub Capacity Allocation</h4>
+            <h4 className="text-xs font-bold uppercase tracking-wider text-slate-700 dark:text-slate-400">Declared Acreage vs Reference Area</h4>
             <span className="font-mono text-[10px] font-bold bg-emerald-50 text-emerald-600 border border-emerald-250 dark:bg-emerald-500/10 dark:border-emerald-500/20 dark:text-emerald-500 px-2 py-0.5 rounded">
-              {capacity.percentage}% Saturated
+              {capacity.percentage == null ? '—% Saturated' : `${capacity.percentage}% Saturated`}
             </span>
           </div>
           <div className="space-y-2">
             <div className="flex justify-between text-xs font-bold">
-              <span className="text-slate-800 dark:text-slate-300">{selectedMarket} Main Hub</span>
-              <span className="font-mono text-slate-600 dark:text-slate-500">{capacity.filled.toFixed(1)} / {capacity.total.toFixed(1)} Acres</span>
+              <span className="text-slate-800 dark:text-slate-300">{selectedMarket} declarations</span>
+              <span className="font-mono text-slate-600 dark:text-slate-500">
+                {capacity.filled == null ? '—' : capacity.filled.toFixed(1)}
+                {' / '}
+                {capacity.total == null ? 'no reference' : capacity.total.toFixed(1)}
+                {' Acres'}
+              </span>
             </div>
             <div className="w-full h-3 bg-slate-100 border border-slate-200 dark:bg-slate-950/20 dark:border-white/5 rounded-lg overflow-hidden">
-              <div className="h-full bg-gradient-to-r from-emerald-500 to-teal-500 transition-all duration-500" style={{ width: `${Math.max(capacity.percentage, 2)}%` }} />
+              <div className="h-full bg-gradient-to-r from-emerald-500 to-teal-500 transition-all duration-500" style={{ width: `${capacity.percentage == null ? 0 : Math.max(capacity.percentage, 2)}%` }} />
             </div>
+            {capacity.basis === 'state_average_fallback' && (
+              <p className="text-[9px] font-mono text-amber-600 dark:text-amber-400 uppercase tracking-wider">
+                Reference is a state average — no district/crop figure on record
+              </p>
+            )}
           </div>
         </Card>
 
@@ -575,14 +606,17 @@ export default function TerminalView() {
             </div>
             <div className="pl-5 flex flex-col">
               <span className="text-[10px] font-bold text-slate-600 dark:text-slate-400 uppercase tracking-widest mb-1">Net Structural Shift</span>
-              <span className={`text-2xl font-black ${dynamicNetShift < 0 ? 'text-red-500' : 'text-emerald-500'}`}>
-                {dynamicNetShift > 0 ? '+' : ''}{formatINR(dynamicNetShift)}
+              <span className={`text-2xl font-black ${dynamicNetShift == null
+                ? 'text-slate-400 dark:text-slate-500'
+                : dynamicNetShift < 0 ? 'text-red-500' : 'text-emerald-500'}`}>
+                {dynamicNetShift == null ? '—' : `${dynamicNetShift > 0 ? '+' : ''}${formatINR(dynamicNetShift)}`}
               </span>
             </div>
           </div>
 
           <div className="border-t border-slate-100 dark:border-white/5 pt-3 mb-3">
             <span className="text-[10px] font-bold text-slate-500 dark:text-slate-400 uppercase tracking-widest block mb-1">15–85th Percentile Band</span>
+            {confidenceLow != null && confidenceHigh != null ? (
             <div className="flex items-center gap-2 font-mono">
               <span className="text-sm font-bold text-slate-700 dark:text-slate-300">{formatINR(confidenceLow)}</span>
               <div className="flex-1 h-1.5 rounded-full bg-slate-100 dark:bg-white/10 relative">
@@ -590,6 +624,11 @@ export default function TerminalView() {
               </div>
               <span className="text-sm font-bold text-slate-700 dark:text-slate-300">{formatINR(confidenceHigh)}</span>
             </div>
+            ) : (
+              <span className="text-[10px] font-mono font-bold uppercase tracking-wider text-slate-400 dark:text-slate-500">
+                No band — no forecast for this market right now
+              </span>
+            )}
           </div>
 
           {/* Reliability badge now reuses the SAME theme object as the chart —
@@ -600,6 +639,11 @@ export default function TerminalView() {
               <span className={`text-[10px] font-black px-2 py-0.5 rounded border font-mono ${theme.badge}`}>
                 {cropMeta.crop_mape_pct.toFixed(1)}% MAPE · {getReliabilityLabel(cropMeta.crop_mape_pct)}
               </span>
+            </div>
+          )}
+          {cropMeta.crop_mape_pct === null && forecastView.hasForecast === false && (
+            <div className="text-[10px] font-mono font-bold uppercase tracking-wider text-slate-400 dark:text-slate-500">
+              Model accuracy hidden — nothing was forecast
             </div>
           )}
 

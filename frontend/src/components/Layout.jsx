@@ -13,7 +13,7 @@ export default function Layout() {
   const [searchQuery, setSearchQuery] = useState('');
   const [tickerString, setTickerString] = useState('LOADING LIVE MARKET DATA...');
   const [lastRefreshed, setLastRefreshed] = useState(null);
-  const [kolarSaturation, setKolarSaturation] = useState('0%');
+  const [kolarSaturation, setKolarSaturation] = useState('—');
   const [totalDeclarations, setTotalDeclarations] = useState(0);
   const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
   const [isCalendarOpen, setIsCalendarOpen] = useState(false);
@@ -81,10 +81,22 @@ export default function Layout() {
           if (Array.isArray(data) && data.length > 0) {
             const tickerStr = data
               .map(item => {
-                const isUp = item.delta >= 0;
-                const arrow = isUp ? '🟢 ▲' : '🔴 ▼';
-                const sign = isUp ? '+' : '';
-                return `${item.crop.toUpperCase()} (${item.mandi.split(' ')[0]}): ₹${item.price.toLocaleString('en-IN')} [${arrow} ${sign}${item.delta.toFixed(1)}%]`;
+                // The API no longer sends invented reference prices: a crop with
+                // no mandi row arrives as price=null and must render as such.
+                if (item.price == null) {
+                  return `${String(item.crop).toUpperCase()}: NO VERIFIED DATA`;
+                }
+                const mandi = (item.mandi || 'unknown').split(' ')[0];
+                const price = `₹${Number(item.price).toLocaleString('en-IN')}`;
+                // delta is a rupee movement (it always was) and only exists when
+                // the previous observation came from the SAME mandi.
+                const move = item.delta == null
+                  ? '— no same-mandi change'
+                  : `${item.delta >= 0 ? '🟢 ▲ +' : '🔴 ▼ '}${item.delta.toFixed(0)}`;
+                const age = item.stale
+                  ? ` ⚠ ${item.days_old}d old (${item.as_of})`
+                  : (item.as_of ? ` · ${item.as_of}` : '');
+                return `${String(item.crop).toUpperCase()} (${mandi}): ${price} [${move}]${age}`;
               })
               .join('   •   ');
             setTickerString(tickerStr);
@@ -108,10 +120,17 @@ export default function Layout() {
     fetch(`${API}/saturation/Kolar/Tomato`)
       .then(res => res.json())
       .then(data => {
-        const displayPct = data.total_area ? Math.round((data.total_area / 175) * 100) : 0;
-        setKolarSaturation(`${displayPct}%`);
+        // Report the backend's own figure. This used to divide by a hardcoded
+        // 175-acre "hub capacity" that no endpoint, model or bot recognises, so
+        // the header disagreed with every other saturation number on screen.
+        setKolarSaturation(
+          Number.isFinite(data.saturation_pct) ? `${Math.round(data.saturation_pct)}%` : 'NO DATA'
+        );
       })
-      .catch(err => console.error("Error loading Kolar saturation", err));
+      .catch(err => {
+        console.error("Error loading Kolar saturation", err);
+        setKolarSaturation('—');
+      });
 
     return () => clearInterval(intervalId);
   }, []);
