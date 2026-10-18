@@ -1,5 +1,14 @@
 name: Continuous Deployment
 
+# Deploy target switch. This workflow builds and SSH-deploys the ORACLE stack
+# only. The current free-tier deployment (Render + Neon + Cloudflare Pages) is
+# driven by render.yaml and the Pages build — it needs none of the jobs below,
+# and they would fail here for lack of an SSH server until one exists.
+# Enable Oracle deploys explicitly:
+#   gh variable set DEPLOY_TARGET --body oracle
+# While the variable is unset or not "oracle", every job below is skipped and
+# pushes to main finish green with no deploy attempts.
+
 on:
   push:
     branches: [main]
@@ -25,7 +34,7 @@ jobs:
   # the exact image already passed CI when it was first built and pushed).
   ci-gate:
     name: CI gate
-    if: ${{ inputs.image_tag == '' }}
+    if: ${{ vars.DEPLOY_TARGET == 'oracle' && inputs.image_tag == '' }}
     uses: ./.github/workflows/ci.yml
     secrets: inherit
 
@@ -38,6 +47,7 @@ jobs:
     # a failed or cancelled CI gate must never reach deploy.
     if: |
       always() &&
+      vars.DEPLOY_TARGET == 'oracle' &&
       (needs.ci-gate.result == 'success' || needs.ci-gate.result == 'skipped')
     outputs:
       image_prefix: ${{ steps.resolve.outputs.image_prefix }}
