@@ -100,8 +100,12 @@ services:
       # Must list the Cloudflare Pages origin(s), comma-separated; no wildcard.
       - key: CORS_ORIGINS
         sync: false
-      # Models are not baked into the image; point at a private archive plus its
-      # SHA-256, or bind-mount. The service refuses to load an unverified model.
+      # Models are not baked into the image; MODEL_URL must be an HTTPS archive
+      # the plain downloader can fetch WITHOUT an auth header (public Hugging
+      # Face model repo or a public repo's Release asset; card-free options in
+      # docs/RENDER_NEON_CLOUDFLARE_DEPLOYMENT.md §2), paired with its
+      # SHA-256. The service refuses to load an unverified model; missing vars
+      # degrade forecasting only (see /health model_status).
       - key: MODEL_URL
         sync: false
       - key: MODEL_SHA256

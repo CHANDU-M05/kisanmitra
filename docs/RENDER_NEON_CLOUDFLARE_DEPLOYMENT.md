@@ -125,11 +125,30 @@ tar czf kisanmitra-models.tar.gz price_model.pkl encoders.pkl model_metadata.jso
 sha256sum kisanmitra-models.tar.gz    # → paste this as MODEL_SHA256
 ```
 
-Host the tarball somewhere privately that serves it over HTTPS with a stable
-URL (Cloudflare R2 free 10 GB, a private GitHub release asset, or any object
-store). Pick a private URL so random traffic can't make Render download it —
-the download itself is not secret, but a public URL invites archive swaps;
-the SHA-256 pin makes a swapped archive fail closed.
+Host the tarball on any HTTPS URL the app can fetch with a plain
+unauthenticated GET (`urllib.request.urlopen`, no `Authorization` header).
+Any such URL works — including a presigned object link, whose signature
+rides in the URL itself — but the options below need **no payment card**,
+which the free-tier plan requires. The weights are trained on public mandi
+data, so hosting them publicly is fine; what protects you is the
+`MODEL_SHA256` check — pickles can execute arbitrary code when loaded, so
+the hash pin is what stops a swapped file, and it must never be skipped.
+
+1. **Hugging Face Hub model repo (recommended)** — public, free, no card,
+   built for model weights: create a model repo, upload the archive, and
+   use `https://huggingface.co/<user>/<repo>/resolve/main/<file>.tar.gz`
+   as `MODEL_URL`.
+2. **A separate small public GitHub repo with a Release** holding just the
+   archive — works the same way, hash pin protecting integrity.
+3. **A Release asset in the main repo — only if this repo is public.**
+   A private repo's release assets are private too: the anonymous download
+   returns 404, the app boots with forecasting off, and `/health` shows
+   `model_status: "failed"`. Check the repo's visibility in Settings
+   before choosing this.
+
+If `MODEL_URL` or `MODEL_SHA256` is missing, the app still boots and every
+non-forecast feature works — check `/health` on the first deploy so a
+silent forecasting outage is not mistaken for success.
 
 ## 3. Render (the API)
 
