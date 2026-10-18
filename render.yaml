@@ -1,0 +1,130 @@
+# KisanMitra — Render Blueprint (free web service)
+#
+# Import from the Render dashboard: New → Blueprint, pointed at this repo.
+# Render reads this file, creates/updates the service, and deploys on pushes to
+# the branch below. Verify every value against current Render docs before the
+# first apply (https://render.com/docs/blueprint-spec).
+#
+# HONEST SCOPE: the free plan (0.1 CPU / 512 MB RAM, spins down after 15 min
+# idle, ~1 min cold start, 750 instance-hours/workspace/month, ephemeral
+# filesystem, no persistent disk / one-off jobs / background workers) suits a
+# demo and viva, NOT heavy load. Do not use this for production traffic.
+# The Oracle stack in deploy/ remains the upgrade path and is untouched.
+#
+# Every secret and per-environment value is `sync: false`: Render creates the
+# key but stores no value, so you fill each one in the dashboard. The blueprint
+# never carries a secret.
+
+services:
+  - type: web
+    name: kisanmitra-api
+    runtime: docker
+    plan: free
+    # Render lists five regions (oregon/ohio/virginia/frankfurt/singapore) and
+    # nowhere restricts the free plan to the US; the blueprint spec accepts
+    # `singapore` for web services. Singapore keeps both hops short for users
+    # in India: user→Render is one round-trip and Render→Neon (create the
+    # project in AWS ap-southeast-1) is same-region. VERIFY IN THE DASHBOARD
+    # that Singapore is offered for the Free instance type when the Blueprint
+    # applies — Render does not state free-tier region availability, and a
+    # service's region cannot be changed after creation. If Singapore is not
+    # offered for free, fall back to whichever region is, preferring
+    # frankfurt (nearest to India ahead of the US), and put Neon in the
+    # matching cloud region so service and database always share one region.
+    region: singapore
+    branch: main
+    # Deploy automatically when a commit lands on the branch above. Render does
+    # NOT have a blueprint key to "wait for CI"; enforce CI-as-a-gate with a
+    # GitHub Check under Dashboard → Service → Settings → "Wait for CI to pass
+    # before deploy" (see docs/RENDER_NEON_CLOUDFLARE_DEPLOYMENT.md).
+    autoDeploy: true
+    dockerfilePath: ./deploy/docker/backend.Dockerfile
+    dockerContext: .
+    healthCheckPath: /health
+    # NOTE: PORT is intentionally NOT set here. Render injects PORT at runtime
+    # and routes traffic to it; the image command binds ${PORT:-8000}. Hard-coding
+    # PORT in the blueprint would override Render's value and break routing.
+    envVars:
+      # ── Non-secret settings (safe to keep in the repo) ──────────────────────
+      - key: APP_ENV
+        value: production
+      - key: WEB_CONCURRENCY
+        value: "1"
+      # Neon requires TLS; psycopg3 maps this to the libpq sslmode kwarg.
+      - key: DB_SSLMODE
+        value: require
+      # Small pool + aggressive recycle for a scale-to-zero Postgres.
+      - key: DB_POOL_SIZE
+        value: "3"
+      - key: DB_MAX_OVERFLOW
+        value: "2"
+      - key: DB_POOL_RECYCLE
+        value: "300"
+      - key: DB_CONNECT_RETRIES
+        value: "3"
+      # Ephemeral filesystem: everything writable goes under /tmp (lost on
+      # redeploy/spin-down, which is fine — state lives in Neon).
+      - key: MODEL_DIR
+        value: /tmp/kisanmitra/models
+      - key: KISANMITRA_LOCK_DIR
+        value: /tmp/kisanmitra/locks
+      - key: KISANMITRA_LOG_DIR
+        value: /tmp/kisanmitra/logs
+      # In-process AGMARKNET refresh. It also catches up on wake if the feed is
+      # past PRICE_MAX_AGE_DAYS, so a spun-down service refreshes stale data on
+      # its first request after resuming.
+      - key: REFRESH_ENABLED
+        value: "true"
+      - key: REFRESH_INTERVAL_HOURS
+        value: "6"
+      - key: REFRESH_LOOKBACK_DAYS
+        value: "10"
+      - key: REFRESH_STATE
+        value: Karnataka
+      - key: PRICE_MAX_AGE_DAYS
+        value: "3"
+
+      # ── Secrets / per-environment values (created empty; fill in dashboard) ──
+      - key: SECRET_KEY
+        sync: false
+      - key: DB_HOST
+        sync: false
+      - key: DB_PORT
+        sync: false
+      - key: DB_NAME
+        sync: false
+      - key: DB_USER
+        sync: false
+      - key: DB_PASSWORD
+        sync: false
+      # Must list the Cloudflare Pages origin(s), comma-separated; no wildcard.
+      - key: CORS_ORIGINS
+        sync: false
+      # Models are not baked into the image; point at a private archive plus its
+      # SHA-256, or bind-mount. The service refuses to load an unverified model.
+      - key: MODEL_URL
+        sync: false
+      - key: MODEL_SHA256
+        sync: false
+      # WhatsApp Cloud API (the production messaging channel).
+      - key: WHATSAPP_TOKEN
+        sync: false
+      - key: WHATSAPP_PHONE_NUMBER_ID
+        sync: false
+      - key: WHATSAPP_VERIFY_TOKEN
+        sync: false
+      - key: WHATSAPP_APP_SECRET
+        sync: false
+      # Telegram bot does NOT run on Render free (no background workers); these
+      # are only needed if the bot runs elsewhere or locally for a demo.
+      - key: TELEGRAM_BOT_TOKEN
+        sync: false
+      - key: TELEGRAM_WEBHOOK_URL
+        sync: false
+      - key: TELEGRAM_WEBHOOK_SECRET
+        sync: false
+      # Optional integrations.
+      - key: GEMINI_API_KEY
+        sync: false
+      - key: DATA_GOV_API_KEY
+        sync: false
