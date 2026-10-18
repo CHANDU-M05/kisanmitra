@@ -222,13 +222,20 @@ def validate_production_settings(config: Settings) -> None:
          "WHATSAPP_APP_SECRET must be set to enforce webhook signature verification."),
         ("*" not in [origin.strip() for origin in config.cors_origins.split(",")],
          "CORS_ORIGINS must list explicit trusted origins; wildcard is unsafe in production."),
+        # A leaked credential is unsafe whether or not the refresh job runs:
+        # the value is already burned, and REFRESH_ENABLED can be turned on
+        # later without the operator noticing the key was never rotated. This
+        # must not be gated on refresh_enabled, which is how a burned key was
+        # previously accepted whenever the pipeline happened to be disabled.
+        (not (config.data_gov_api_key
+              and is_known_compromised_secret(config.data_gov_api_key)),
+         "DATA_GOV_API_KEY is set to a previously leaked value; rotate it "
+         "even if REFRESH_ENABLED is off."),
         # The refresh pipeline is useless without a key and would only log
         # failures, so a production deploy that enables it and omits the key is
         # a configuration error, not a runtime one.
-        (not config.refresh_enabled or (bool(config.data_gov_api_key)
-         and not is_known_compromised_secret(config.data_gov_api_key)),
-         "DATA_GOV_API_KEY must be set (and must not be a previously leaked key) "
-         "while REFRESH_ENABLED is on."),
+        ((not config.refresh_enabled) or bool(config.data_gov_api_key),
+         "DATA_GOV_API_KEY must be set while REFRESH_ENABLED is on."),
     )
     failures = [message for valid, message in checks if not valid]
     if failures:

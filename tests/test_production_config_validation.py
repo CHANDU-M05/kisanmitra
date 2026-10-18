@@ -56,6 +56,11 @@ def _production_settings(**overrides):
         "whatsapp_app_secret": "whatsapp-app-secret",
         "cors_origins": "https://kisanmitra.example",
         "data_gov_api_key": "a-fresh-data-gov-in-key",
+        # Pin the refresh precondition instead of inheriting the ambient
+        # REFRESH_ENABLED. CI exports REFRESH_ENABLED=false, which silently
+        # turned the "refresh enabled, no key" case into a valid config and
+        # made it pass/fail on the environment rather than the code under test.
+        "refresh_enabled": True,
     }
     values.update(overrides)
     return Settings(_env_file=None, **values)
@@ -87,6 +92,19 @@ def test_refresh_may_be_disabled_without_a_data_gov_key():
     """An API that only answers from its own DB must still boot in production."""
     validate_production_settings(_production_settings(
         data_gov_api_key="", refresh_enabled=False))
+
+
+def test_leaked_data_gov_key_is_rejected_even_with_refresh_disabled(injected_compromise_list):
+    """
+    Regression: the data.gov check was gated on refresh_enabled, so a burned
+    key was silently accepted whenever the pipeline was off -- and flipping
+    REFRESH_ENABLED on later would revive it unrotated. A compromised value is
+    unsafe regardless of whether the job that would use it is running.
+    """
+    with pytest.raises(RuntimeError, match="Unsafe production configuration"):
+        validate_production_settings(_production_settings(
+            data_gov_api_key=LEAK_UNDER_TEST["data_gov_api_key"],
+            refresh_enabled=False))
 
 
 def test_leaked_credentials_are_detected_by_digest_only(injected_compromise_list):

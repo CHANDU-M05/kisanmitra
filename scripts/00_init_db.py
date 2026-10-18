@@ -12,6 +12,7 @@ Usage:
 from __future__ import annotations
 
 import asyncio
+import os
 import sys
 from pathlib import Path
 
@@ -44,13 +45,24 @@ async def init_db() -> None:
     engine = create_async_engine(settings.database_url, echo=False)
 
     print("\n── Enabling PostgreSQL extensions ──")
-    for ext in ["postgis", "vector"]:
-        try:
-            async with engine.begin() as conn:
-                await conn.execute(sa.text(f"CREATE EXTENSION IF NOT EXISTS {ext};"))
-            print(f"   {ext} ✓")
-        except Exception:
-            print(f"   {ext} ✗ (not installed — skipped)")
+    # Extensions are only meaningful when the ORM was imported with the
+    # matching DB_HAS_* flag (see backend/core/models.py); otherwise no column
+    # uses them. Gate creation on that same explicit configuration so a
+    # PostGIS-less pgvector image is a deliberate "not requested" skip rather
+    # than a database error swallowed by a bare except. When an extension IS
+    # required, a genuine failure (missing control file, no privilege) must
+    # surface instead of silently producing a schema the app cannot use.
+    requested = {
+        "postgis": os.getenv("DB_HAS_POSTGIS", "").lower() in ("1", "true", "yes"),
+        "vector": os.getenv("DB_HAS_PGVECTOR", "").lower() in ("1", "true", "yes"),
+    }
+    for ext, is_required in requested.items():
+        if not is_required:
+            print(f"   {ext} – not requested (set DB_HAS_{ext.upper()}); skipped")
+            continue
+        async with engine.begin() as conn:
+            await conn.execute(sa.text(f"CREATE EXTENSION IF NOT EXISTS {ext};"))
+        print(f"   {ext} ✓")
 
     print("\n── Creating tables ──")
     async with engine.begin() as conn:
