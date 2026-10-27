@@ -156,7 +156,9 @@ async def main(dry_run: bool, only_missing: bool, batch_size: int) -> None:
                 failed += 1
                 continue
             await session.execute(
-                sa.text("UPDATE knowledge_chunks SET embedding = :vec::vector WHERE id = :id"),
+                # CAST() form, not ':vec::vector': psycopg3 renders :name as
+                # %(name)s and the chained :: cast breaks text() parsing.
+                sa.text("UPDATE knowledge_chunks SET embedding = CAST(:vec AS vector) WHERE id = :id"),
                 {"vec": str(vector), "id": row.id},
             )
             done += 1

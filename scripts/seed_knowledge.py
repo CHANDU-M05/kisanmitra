@@ -59,7 +59,7 @@ RULES:
 
 # ── Pipeline ──────────────────────────────────────────────
 
-client = genai.Client(api_key=settings.gemini_api_key)
+client = genai.Client(api_key=settings.gemini_api_key.get_secret_value())
 
 async def call_with_retry(func, *args, **kwargs):
     """Robust retry logic with exponential backoff."""
