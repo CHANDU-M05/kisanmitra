@@ -27,8 +27,15 @@ _llm = None
 if settings.gemini_api_key and settings.gemini_api_key.get_secret_value() != "fill_this_later" and settings.gemini_api_key.get_secret_value() != "":
     try:
         _embeddings = GoogleGenerativeAIEmbeddings(
-            model="models/text-embedding-004",
+            # gemini-embedding-001 replaces text-embedding-004, which Google
+            # removed from v1beta (404 NOT_FOUND since 2026). output_dimensionality
+            # pins 768-d vectors so ingest and query stay in ONE semantic space
+            # and match Vector(768) in backend/core/models.py. If this model is
+            # ever deprecated again, embed_text() logs the failure — check for
+            # silent keyword-fallback before blaming retrieval ranking.
+            model="models/gemini-embedding-001",
             google_api_key=settings.gemini_api_key.get_secret_value(),
+            output_dimensionality=768,
         )
         
         # Primary: Gemini 2.5 Flash for fast, robust generative advisory.
