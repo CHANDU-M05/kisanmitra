@@ -109,9 +109,14 @@ async def farmer_declarations(
         )
         raise HTTPException(status_code=403, detail="Access denied.")
 
+    # Match either identity shape: verified mobile (web/WhatsApp, legacy rows)
+    # or platform sender_id (post-split Telegram rows, where phone is NULL).
+    # caller_id == phone IDOR check above still pins the requested identity.
     result = await db.execute(
         select(CropDeclaration)
-        .where(CropDeclaration.phone == phone)
+        .where(
+            (CropDeclaration.phone == phone) | (CropDeclaration.sender_id == phone)
+        )
         .order_by(CropDeclaration.declared_at.desc())
     )
     decls = result.scalars().all()
@@ -204,6 +209,8 @@ async def get_declarations(
             "id": d.id,
             "farmer_name": d.farmer_name,
             "phone": d.phone,
+            "channel": d.channel,
+            "sender_id": d.sender_id,
             "village": d.village,
             "district": d.district,
             "taluk": d.taluk,

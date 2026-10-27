@@ -19,12 +19,13 @@ from __future__ import annotations
 import datetime
 import logging
 import re
+import time
 from datetime import date
 from typing import Optional
 
 from fastapi import APIRouter, Depends, Request
 from pydantic import BaseModel
-from sqlalchemy import desc, func, select
+from sqlalchemy import desc, func, or_, select, text, update
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -330,6 +331,48 @@ async def _get_previous_intent(sender_id: str, channel: str, db: AsyncSession) -
 
 # ── Intent sub-handlers ───────────────────────────────────
 
+# ── Identity-schema feature probe (channel / sender_id columns) ─────────
+# crop_declarations gained nullable channel/sender_id columns and a nullable
+# phone (scripts/tools/migrate_channel_sender_id.py, operator-run BEFORE any
+# deploy that maps these columns). The probe lets this module stay correct
+# against a not-yet-migrated database (dev fixtures, rollback window).
+# _IDENTITY_PIN forces a mode deterministically for unit tests (project spec:
+# pin feature flags inside each test); production leaves it None and uses the
+# cached information_schema probe — a True result is permanent (columns are
+# only ever added), a False result is re-checked every 5 minutes so a manual
+# migration is picked up without a restart.
+_IDENTITY_PIN: Optional[bool] = None
+_IDENTITY_AUTO: Optional[bool] = None
+_IDENTITY_AUTO_AT: float = 0.0
+_IDENTITY_REPROBE_SECONDS = 300
+
+_IDENTITY_PROBE = text(
+    "SELECT count(*) FILTER (WHERE column_name IN ('channel','sender_id')) = 2 "
+    "       AND COALESCE(bool_or(column_name = 'phone' AND is_nullable = 'YES'), false) "
+    "FROM information_schema.columns "
+    "WHERE table_name = 'crop_declarations' AND table_schema = current_schema()"
+)
+
+
+async def _identity_columns_present(db: AsyncSession) -> bool:
+    """True once crop_declarations has channel/sender_id and phone is nullable."""
+    global _IDENTITY_AUTO, _IDENTITY_AUTO_AT
+    if _IDENTITY_PIN is not None:
+        return _IDENTITY_PIN
+    if _IDENTITY_AUTO is True:
+        return True
+    if _IDENTITY_AUTO is False and time.monotonic() < _IDENTITY_AUTO_AT:
+        return False
+    try:
+        res = await db.execute(_IDENTITY_PROBE)
+        present = res.scalar() is True   # strict: mock/unexpected results → legacy
+    except Exception:
+        present = False                   # non-Postgres dialect or probe failure
+    _IDENTITY_AUTO = present
+    _IDENTITY_AUTO_AT = time.monotonic() + _IDENTITY_REPROBE_SECONDS
+    return present
+
+
 async def _handle_price(crop: str, district: str, db: AsyncSession) -> dict:
     """Compatibility wrapper around the shared, channel-independent price service."""
     from backend.services.price_service import get_price_forecast
@@ -351,14 +394,27 @@ async def _handle_declare(
         _CHANNEL_NAMES = {"whatsapp": "WhatsApp Farmer", "telegram": "Telegram Farmer"}
         farmer_name = _CHANNEL_NAMES.get(channel, "KisanMitra Farmer")
 
+    # Telegram identity split: once the schema supports it, the platform user id
+    # lives in sender_id and phone stays NULL instead of holding a fake mobile.
+    # Web/WhatsApp (and Telegram pre-migration) keep the historic phone-keyed path.
+    identity_mode = channel == "telegram" and await _identity_columns_present(db)
+
     # ── Single-query: dedup guard + is_update UX signal ─────────────────
     _DEDUP_WINDOW_SECONDS = 60
     cutoff = datetime.datetime.now(datetime.UTC) - datetime.timedelta(seconds=_DEDUP_WINDOW_SECONDS)
 
+    # Identity match covers both shapes: legacy rows carry the sender id in
+    # phone, post-split rows in sender_id. Matching either keeps a farmer's
+    # existing declarations (and area updates) attached across the cutover.
+    identity_match = (
+        or_(CropDeclaration.phone == sender_id, CropDeclaration.sender_id == sender_id)
+        if identity_mode else CropDeclaration.phone == sender_id
+    )
+
     prior_result = await db.execute(
         select(CropDeclaration)
         .where(
-            CropDeclaration.phone == sender_id,
+            identity_match,
             CropDeclaration.crop.ilike(crop),
             CropDeclaration.district.ilike(district),
             CropDeclaration.season == season,
@@ -391,11 +447,25 @@ async def _handle_declare(
     is_update = prior is not None  # prior exists but is old → farmer is updating area
 
     # ── Upsert — atomically insert or update area on conflict ──────────────
-    stmt = (
-        pg_insert(CropDeclaration)
-        .values(
+    if identity_mode and prior is not None:
+        # Genuine update: rewrite the matched row in place. This also migrates
+        # a legacy phone-keyed row to the sender_id shape (phone → NULL) on
+        # touch, so the farmer never ends up with two identity shapes for the
+        # same crop/district/season.
+        stmt = (
+            update(CropDeclaration)
+            .where(CropDeclaration.id == prior.id)
+            .values(
+                area_acres=area,
+                farmer_name=farmer_name,
+                channel="telegram",
+                sender_id=sender_id,
+                phone=None,
+            )
+        )
+    else:
+        values = dict(
             farmer_name=farmer_name,
-            phone=sender_id,
             village="",
             district=district,
             crop=crop,
@@ -404,19 +474,46 @@ async def _handle_declare(
             trust_score=0.85,
             satellite_status="pending",
         )
-        .on_conflict_do_update(
-            index_elements=[
-                func.lower(CropDeclaration.phone),
-                func.lower(CropDeclaration.crop),
-                func.lower(CropDeclaration.district),
-                CropDeclaration.season,
-            ],
-            set_={
-                "area_acres":  area,
-                "farmer_name": farmer_name,
-            },
-        )
-    )
+        if identity_mode:
+            stmt = (
+                pg_insert(CropDeclaration)
+                .values(
+                    **values,
+                    phone=None,
+                    channel="telegram",
+                    sender_id=sender_id,
+                )
+                .on_conflict_do_update(
+                    index_elements=[
+                        func.lower(CropDeclaration.sender_id),
+                        func.lower(CropDeclaration.crop),
+                        func.lower(CropDeclaration.district),
+                        CropDeclaration.season,
+                    ],
+                    index_where=text("sender_id IS NOT NULL"),
+                    set_={
+                        "area_acres":  area,
+                        "farmer_name": farmer_name,
+                    },
+                )
+            )
+        else:
+            stmt = (
+                pg_insert(CropDeclaration)
+                .values(**values, phone=sender_id)
+                .on_conflict_do_update(
+                    index_elements=[
+                        func.lower(CropDeclaration.phone),
+                        func.lower(CropDeclaration.crop),
+                        func.lower(CropDeclaration.district),
+                        CropDeclaration.season,
+                    ],
+                    set_={
+                        "area_acres":  area,
+                        "farmer_name": farmer_name,
+                    },
+                )
+            )
     try:
         await db.execute(stmt)
     except IntegrityError:

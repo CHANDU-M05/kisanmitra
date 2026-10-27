@@ -191,7 +191,7 @@ export default function FarmersView() {
 
     const headers = ['Farmer Name', 'Phone', 'District', 'Taluk', 'Crop', 'Acreage', 'Trust Score', 'Satellite Status'];
     const rows = filteredDeclarations.map(row => [
-      `"${row.farmer_name}"`, `"${row.phone}"`, `"${row.district}"`, `"${row.taluk || ''}"`,
+      `"${row.farmer_name}"`, `"${row.phone || ''}"`, `"${row.district}"`, `"${row.taluk || ''}"`,
       `"${row.crop}"`, row.area_acres.toFixed(1), (row.trust_score * 100).toFixed(0) + '%',
       `"${row.satellite_status || 'pending'}"`
     ]);

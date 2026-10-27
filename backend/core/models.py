@@ -22,6 +22,7 @@ from sqlalchemy import (
     Text,
     UniqueConstraint,
     func,
+    text,
 )
 from sqlalchemy.dialects.postgresql import JSONB, UUID
 import uuid
@@ -88,13 +89,26 @@ class CropDeclaration(Base):
     """
     Single-season crop declaration by a farmer.
     Uses PostGIS POINT when available, otherwise lat/lon floats.
+
+    Identity columns (added Oct 2026, Phase 1 of the sender-id split):
+      phone     — verified Indian mobile number (web form / WhatsApp sender).
+                  NULL for platform-identifier rows. Legacy Telegram rows keep a
+                  Telegram user id here; they are deliberately left unclassified
+                  (channel/sender_id NULL) until Phase 3 can attribute them
+                  reliably — never re-key them from phone patterns or names.
+      channel   — originating platform when reliably known: 'telegram'.
+                  NULL = web, WhatsApp, or legacy/unclassified.
+      sender_id — platform-scoped user id (e.g. Telegram from_user.id),
+                  paired with channel. Never dialled or treated as a phone.
     """
 
     __tablename__ = "crop_declarations"
 
     id               = Column(Integer, primary_key=True)
     farmer_name      = Column(String(255), nullable=False)
-    phone            = Column(String(20), nullable=False, index=True)
+    phone            = Column(String(20), nullable=True, index=True)
+    channel          = Column(String(20), nullable=True)
+    sender_id        = Column(String(64), nullable=True)
     village          = Column(String(255))
     district         = Column(String(100), nullable=False, index=True)
     taluk            = Column(String(100), index=True)
@@ -124,6 +138,20 @@ class CropDeclaration(Base):
             func.lower(Column("district")),
             Column("season"),
             unique=True,
+        ),
+        # Telegram-mode dedup for phone-NULL rows: the phone index above can never
+        # fire for NULL (Postgres treats NULLs as distinct), so platform rows get
+        # their own partial unique index keyed on sender_id. Partial so legacy
+        # rows (sender_id IS NULL) are excluded and cannot violate it at creation.
+        Index(
+            "uq_decl_sender_crop_district_season",
+            func.lower(Column("sender_id")),
+            func.lower(Column("crop")),
+            func.lower(Column("district")),
+            Column("season"),
+            unique=True,
+            postgresql_where=text("sender_id IS NOT NULL"),
+            sqlite_where=text("sender_id IS NOT NULL"),
         ),
     )
 

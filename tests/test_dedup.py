@@ -36,6 +36,15 @@ class TestDeclareIdempotencyGuard:
     result object and we control `declared_at` to trigger different branches.
     """
 
+    @pytest.fixture(autouse=True)
+    def _pin_legacy_schema(self, monkeypatch):
+        """Pin the pre-split (phone-keyed) schema mode so the information_schema
+        probe never fires and the db.execute call counts below stay exact.
+        Identity-mode behaviour is covered deterministically in
+        tests/test_declaration_identity.py."""
+        from backend.routers import conversation
+        monkeypatch.setattr(conversation, "_IDENTITY_PIN", False)
+
     def _make_db(self, existing_declaration=None):
         """Build a mock AsyncSession that returns `existing_declaration` on SELECT."""
         db = AsyncMock()

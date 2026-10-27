@@ -8,10 +8,12 @@ registry accumulated inconsistent formats: "+91 98765 43210", "09876543210",
 form — a bare 10-digit national number starting 6-9 — used both to normalise
 acceptable inputs and to reject the rest at the schema boundary.
 
-NOTE: the Telegram channel stores a Telegram *user id* in CropDeclaration.phone
-(see backend/routers/conversation.py::_handle_declare). That is a channel
-identifier, not a dialled number, so it is intentionally NOT routed through this
-validator — only human-entered web numbers are.
+NOTE: historically the Telegram channel stored a Telegram *user id* in
+CropDeclaration.phone (backend/routers/conversation.py::_handle_declare). As of
+the Oct 2026 identity split, new Telegram rows store the id in sender_id with
+channel='telegram' and phone NULL; only LEGACY rows still carry ids in phone.
+Telegram ids are intentionally NOT routed through this validator — only
+human-entered web numbers are.
 """
 from __future__ import annotations
 
