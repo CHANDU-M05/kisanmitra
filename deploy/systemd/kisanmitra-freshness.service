@@ -1,0 +1,11 @@
+[Unit]
+Description=KisanMitra market-data freshness check (Neon mandi prices)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+WorkingDirectory=/home/chandu/kisanmitra
+ExecStart=/home/chandu/kisanmitra/venv/bin/python scripts/tools/check_freshness.py
+StandardOutput=append:/home/chandu/.local/state/kisanmitra-freshness.log
+StandardError=append:/home/chandu/.local/state/kisanmitra-freshness.log
