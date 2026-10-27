@@ -73,3 +73,6 @@ certbot/
 # Local database dumps contain farmer PII — never commit
 *.dump
 .neon
+
+# credential files that must never be committed
+env.txt
