@@ -13,10 +13,20 @@ is already up. These tests pin exactly that contract (and its limits):
 
 No network is touched: httpx.AsyncClient is stubbed per test.
 """
-import httpx
-import pytest
+import os
 
-from telegram_bot import backend_client
+# telegram_bot.config validates its env vars at IMPORT time (_require raises
+# OSError). Locally a .env satisfies them; CI's clean checkout has none, so
+# these tests would crash pytest at collection (exit 2). Pin inert values
+# BEFORE importing the module under test; setdefault keeps any real
+# environment untouched.
+os.environ.setdefault("TELEGRAM_BOT_TOKEN", "test-bot-token")
+os.environ.setdefault("SECRET_KEY", "test-secret-key-0123456789abcdef")
+
+import httpx  # noqa: E402
+import pytest  # noqa: E402
+
+from telegram_bot import backend_client  # noqa: E402
 
 
 class _Resp:
