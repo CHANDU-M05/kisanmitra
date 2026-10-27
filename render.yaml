@@ -32,7 +32,13 @@ services:
     # frankfurt (nearest to India ahead of the US), and put Neon in the
     # matching cloud region so service and database always share one region.
     region: singapore
-    branch: main
+    # Deploy from the release branch, NOT main. As of 2026-10-27 the remote
+    # `main` (8550e75) predates this file, the Dockerfile and every deployment
+    # commit — a blueprint applied from `main` finds no deployment code at all.
+    # `release/production-deployment-pipeline` is the branch that carries the
+    # tested stack (PR #1). After PR #1 merges and main is verified current,
+    # switching this back to `main` is the intended end state.
+    branch: release/production-deployment-pipeline
     # Deploy automatically when a commit lands on the branch above. Render does
     # NOT have a blueprint key to "wait for CI"; enforce CI-as-a-gate with a
     # GitHub Check under Dashboard → Service → Settings → "Wait for CI to pass
