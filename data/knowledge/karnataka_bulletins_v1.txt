@@ -1,0 +1,105 @@
+KisanMitra Canonical Agronomy Knowledge — Karnataka Bulletins, Volume 1
+Compiled from the KisanMitra curated advisory set (backend/services/rag.py
+offline table) so retrieval and offline fallback can never disagree.
+Coverage: tomato, potato, onion, brinjal, maize, cabbage, ragi — Kolar and
+Chikkaballapur belt.
+
+BULLETIN 1 — Tomato: Basal NPK and Fertilizer Schedule (Kolar/Chikkaballapur)
+Tomato is a heavy feeder. Apply balanced nutrients at 60 kg N, 50 kg P and
+50 kg K per acre. Incorporate 10 tonnes of well-decomposed farmyard manure
+(FYM) during basal land preparation. Split the nitrogen into three equal
+doses at 0, 30 and 50 days after transplanting. For fruit setting, spray
+Boron at 1 g per litre of water. For leaf spot and late blight (angamari),
+spray Cymoxanil + Mancozeb at 2 g/L. Calcium or Boron deficiency causes
+flower drop and blossom-end rot.
+
+BULLETIN 2 — Tomato: Leaf Curl Virus Management
+Leaf Curl Virus in Tomato causes downward curling and yellowing of leaves
+and stunted growth. The disease is transmitted by whitefly. Spray
+Imidacloprid at 0.3 ml per litre to control the whitefly vector. Maintain a
+5 metre distance between plots for ventilation. Remove and destroy infected
+plants early. Where stunting with curling appears, also foliar spray a
+Micronutrient Mixture containing Zinc, Boron and Iron at 2.5 g/L every
+14 days, and eliminate whitefly with Acetamiprid 0.5 g/L or Imidacloprid
+0.5 ml/L.
+
+BULLETIN 3 — Tomato and Potato: Stem Rot (Thundu Roga)
+Soil-borne Sclerotium rolfsii fungus causes collar rot at the stem base;
+the stem decays and the plant breaks and collapses. Drench the stem base
+with Carbendazim 50 WP at 1 g/L or Ciproconazole/Tebuconazole at 1 ml/L.
+Apply Trichoderma harzianum at 2 kg per acre mixed with fertilizer. Prevent
+water stagnation in the field and immediately uproot and destroy infected
+plants.
+
+BULLETIN 4 — Capsicum and Tomato: Bacterial Wilt and Drenching Volume
+Bacterial wilt (Ralstonia solanacearum) causes sudden drying of green
+plants. Drench the stem base with Copper Oxychloride 3 g/L plus
+Streptocycline 0.5 g per 10 L of water, ensuring complete root-zone
+saturation of 150-200 ml of prepared solution per plant. Three days after
+drenching, fertigate 19:19:19 at 3 kg per acre through drip to stimulate
+fresh root growth. Keep fields free of waterlogging.
+
+BULLETIN 5 — Brinjal and Capsicum: Root-Knot Nematode (Gantu Hula)
+Soil nematodes (Meloidogyne spp.) form knots on roots and turn plants
+yellow. Apply the bio-nematicide Purpureocillium lilacinus (formerly
+Paecilomyces lilacinus) at 2 kg per acre, or drench Fluopyram at 1 ml/L to
+the roots. Intercrop Marigold (Chenduhoo, Tagetes erecta) between rows:
+marigold roots release alpha-terthienyl compounds that reduce nematode
+populations, and their flowers attract Helicoverpa moths away from the
+crop, acting as a trap crop.
+
+BULLETIN 6 — Potato: Tuber Bulking and Potash Management
+Potassium is critical during the tuber bulking stage at 45-60 days. Spray
+Sulphate of Potash (SOP 0:0:50) at 5 g/L or 13:0:45 at 10 g/L on the 45th
+and 60th day after planting. Apply MOP at 30 kg per acre to the soil at
+earthing-up and irrigate lightly. Avoid excess nitrogen after day 45.
+
+BULLETIN 7 — Onion: Thrips, Purple Blotch and Neck Rot
+Onion thrips scrape the leaves and neck rot damages the bulb. Spray
+Fipronil 5 SC at 2 ml/L or Spinetoram at 0.9 ml/L for thrips. For purple
+blotch and downy mildew in humidity, spray Mancozeb + Carbendazim (Saaf)
+at 2 g/L weekly, or Metalaxyl 8 + Mancozeb 64 WP at 2.5 g/L at 10-day
+intervals. Because onion leaves are waxy, add a sticker/spreader at
+0.5 ml/L to every spray. Apply Copper Oxychloride 3 g/L fifteen days
+before harvest against neck rot, and stop irrigation 10-15 days before
+harvest to protect storage life.
+
+BULLETIN 8 — Maize: Nutrition and Fall Armyworm Control
+At sowing apply DAP at 50 kg per acre, then Urea at 35 kg per acre on the
+30th and 60th day. Fall armyworm (Spodoptera frugiperda) caterpillars feed
+inside the whorl. Spray Emamectin Benzoate at 0.4 g/L or Chlorantraniliprole
+18.5 SC at 0.4 ml/L directly into the whorl, or use Bacillus thuringiensis
+(Bt) at 2 g/L. Spray early morning or late evening when caterpillars feed
+actively. To slow resistance, rotate modes of action between Spinetoram,
+Emamectin Benzoate and biological agents.
+
+BULLETIN 9 — Crop Rotation and Soil Nitrogen Restoration
+After cereal crops such as maize or ragi, grow legumes (groundnut,
+cowpea, alasande/horse gram). Legume root nodules with Rhizobium bacteria
+fix atmospheric nitrogen and restore 15-25 kg of nitrogen per acre to the
+soil naturally. Treat legume seed with Rhizobium culture at 200 grams per
+acre before sowing. Rotate post-Kharif maize with groundnut to break pest
+cycles as well.
+
+BULLETIN 10 — Alkaline Soil (pH 7.8): Zinc and Fertigation
+Alkaline soils lock up Zinc and Iron. Apply chelated Zinc (Zn-EDTA) at
+1 g/L as foliar spray, or fertigate Zinc Sulphate at 5 kg per acre
+together with elemental sulphur. Do not mix Zinc Sulphate directly with
+DAP or 19:19:19 in the fertigation tank, because precipitation blocks the
+drip lines.
+
+BULLETIN 11 — Cabbage: NPK Basal, Fertigation and Diamondback Moth
+Cabbage needs high nitrogen and potassium for head formation. Apply FYM
+10 tonnes per acre plus 60:50:50 kg NPK per acre in the basal dose.
+Fertigate 19:19:19 at 3 kg per acre weekly during weeks 2-5 (vegetative)
+and 13:0:45 at 4 kg per acre weekly during weeks 6-9 (head initiation).
+Apply Boron 1 kg per acre and Calcium Nitrate 5 kg per acre at day 35 to
+prevent hollow stem. For diamondback moth spray Chlorantraniliprole
+0.4 ml/L or Bt 2 g/L. Keep spacing 45x30 cm and avoid over-irrigation at
+head formation.
+
+BULLETIN 12 — Ragi: Blast Management and Grain Fill
+Neck blast and finger blast of ragi (finger millet) damage grain fill when
+the panicle emerges. Maintain field sanitation and balanced potash for
+strong culm. Seed treatment with Trichoderma at 4 g per kg of seed
+protects the root system.

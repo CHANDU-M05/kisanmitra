@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import re
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from langchain_google_genai import GoogleGenerativeAIEmbeddings, ChatGoogleGenerativeAI
@@ -97,8 +98,9 @@ def get_offline_fallback(query: str, crop: str | None) -> tuple[str, str]:
                 "• **ಟಿಪ್**: ಸಾಲುಗಳ ಮಧ್ಯೆ ಚೆಂಡುಹೂ (Marigold) ಬೆಳೆಯುವುದರಿಂದ ನೆಮಟೋಡ್ಸ್ ಸಂಖ್ಯೆ ಗಣನೀಯವಾಗಿ ಕಡಿಮೆಯಾಗುತ್ತದೆ.", suffix
             )
 
-        # 3. Potato Potash & Tuber Enlargement
-        if any(kw in q for kw in ["ದಪ್ಪ", "ಪೊಟ್ಯಾಶ್", "ಗಡ್ಡೆ", "potash", "tuber", "size"]):
+        # 3. Potato Potash & Tuber Enlargement — gated on potato context:
+        # bare "ದಪ್ಪ" (thick) / "size" matched every "make X bigger" question.
+        if c == "potato" or any(kw in q for kw in ["ಗಡ್ಡೆ", "ಆಲೂ", "potash", "tuber"]):
             return (
                 "📋 **ಆಲೂಗಡ್ಡೆ ಗಡ್ಡೆ ದಪ್ಪಗಾಗಿಸುವ ಮತ್ತು ಪೊಟ್ಯಾಶ್ ನಿರ್ವಹಣೆ (Potato Tuber Bulking & Potash Guide)**:\n"
                 "• **ವಿಷಯ**: ಗಡ್ಡೆ ಕಟ್ಟುವ ಮತ್ತು ದಪ್ಪಗಾಗುವ ಹಂತದಲ್ಲಿ (45-60 ದಿನಗಳು) ಪೊಟ್ಯಾಶ್ ಪೋಷಕಾಂಶ ಅತ್ಯಗತ್ಯ.\n"
@@ -106,8 +108,9 @@ def get_offline_fallback(query: str, crop: str | None) -> tuple[str, str]:
                 "• **ಟಿಪ್**: ಮಣ್ಣಿಗೆ ಪ್ರತಿ ಎಕರೆಗೆ 30 ಕೆಜಿ MOP ಗೊಬ್ಬರ ನೀಡಿ ಮತ್ತು ಹಗುರವಾಗಿ ನೀರು ಹಾಯಿಸಿ.", suffix
             )
 
-        # 4. Capsicum/Tomato Wilt & Drenching
-        if any(kw in q for kw in ["sudu", "sagida", "ವೈಲ್ಟ್", "drenching", "drench", "bactericide", "ಸಿಂಪಡಿಸಿ"]):
+        # 4. Capsicum/Tomato Wilt & Drenching — "ಸಿಂಪಡಿಸಿ" (bare "spray") dropped:
+        # it is a stopword in advisory questions, not a wilt signal.
+        if any(kw in q for kw in ["sudu", "sagida", "ವೈಲ್ಟ್", "drenching", "drench", "bactericide"]):
             return (
                 "📋 **ಬ್ಯಾಕ್ಟೀರಿಯಲ್ ವೈಲ್ಟ್ ಮತ್ತು ವಾಡಿ ಹೋಗುವ ರೋಗ ನಿರ್ವಹಣೆ (Bacterial Wilt & Drenching Guide)**:\n"
                 "• **ವಿಷಯ**: ಮಣ್ಣಿನಲ್ಲಿ ಮೂಲದ ಬ್ಯಾಕ್ಟೀರಿಯಾ ಅಥವಾ ಶಿಲೀಂಧ್ರದಿಂದ ಗಿಡಗಳು ಹಠಾತ್ ಒಣಗುತ್ತವೆ.\n"
@@ -115,8 +118,9 @@ def get_offline_fallback(query: str, crop: str | None) -> tuple[str, str]:
                 "• **ಟಿಪ್**: ಡ್ರಿಪ್ ಮೂಲಕ 19:19:19 ಗೊಬ್ಬರವನ್ನು 3 ಕೆಜಿ/ಎಕರೆ ನೀಡಿ ಮತ್ತು ಜಮೀನಿನಲ್ಲಿ ನೀರು ನಿಲ್ಲದಂತೆ ನೋಡಿಕೊಳ್ಳಿ.", suffix
             )
 
-        # 3. Onion Neck Rot & Thrips
-        if any(kw in q for kw in ["ತಿಗಣೆ", "ಕುತ್ತಿಗೆ", "ಕೊಳೆ", "ನೇರಳೆ", "thrips", "rot"]):
+        # 3. Onion Neck Rot & Thrips — gated: "ಕೊಳೆ"/"rot" alone match every
+        # rot disease question (stem rot, neck rot, bulb rot …).
+        if c == "onion" or any(kw in q for kw in ["ತಿಗಣೆ", "ಕುತ್ತಿಗೆ", "ನೇರಳೆ", "ಈರುಳ್ಳಿ", "thrips"]):
             return (
                 "📋 **ಈರುಳ್ಳಿ ಎಲೆ ತಿಗಣೆ ಮತ್ತು ಕುತ್ತಿಗೆ ಕೊಳೆ ರೋಗ ನಿರ್ವಹಣೆ (Onion Thrips & Neck Rot)**:\n"
                 "• **ವಿಷಯ**: ಎಲೆ ತಿಗಣೆ (Thrips) ಎಲೆಗಳನ್ನು ಗೀರಿದ್ದರೆ, ಕುತ್ತಿಗೆ ಕೊಳೆ ಗಡ್ಡೆಯನ್ನು ಹಾನಿಗೊಳಿಸುತ್ತದೆ.\n"
@@ -124,8 +128,13 @@ def get_offline_fallback(query: str, crop: str | None) -> tuple[str, str]:
                 "• **ಟಿಪ್**: ಈರುಳ್ಳಿ ಎಲೆ ನಯವಾಗಿರುವುದರಿಂದ ಸಿಂಪಡಿಸುವಾಗ 0.5ml/L ಆಂಟಿ-ಸ್ಟಿಕ್ಕರ್ (ಅಂಟು) ಬೆರೆಸಿ.", suffix
             )
 
-        # 4. Maize Fall Armyworm & Fertilizers
-        if any(kw in q for kw in ["ಸೈನಿಕ ಹುಳು", "armyworm", "ಯೂರಿಯಾ", "dap", "ಗೊಬ್ಬರ"]):
+        # 4. Maize Fall Armyworm & Fertilizers — MUST be maize-context.
+        # "ಗೊಬ್ಬರ" (fertilizer), "ಯೂರಿಯಾ" and "dap" are crop-agnostic words;
+        # when they sat in this rule's trigger list a Tomato fertilizer question
+        # was answered with maize DAP/urea advice (incident 2026-10-27, and the
+        # explicit crop selection in the UI could not save it because this rule
+        # is checked BEFORE the tomato rule).
+        if c == "maize" or any(kw in q for kw in ["ಸೈನಿಕ ಹುಳು", "ಸೈನಿಕ", "armyworm", "ಮೆಕ್ಕೆಜೋಳ"]):
             return (
                 "📋 **ಮೆಕ್ಕೆಜೋಳ ಪೋಷಕಾಂಶ ಮತ್ತು ಸೈನಿಕ ಹುಳು ನಿರ್ವಹಣೆ (Maize Nutrition & Pest Control)**:\n"
                 "• **ಗೊಬ್ಬರ**: ಬಿತ್ತನೆ ಸಮಯದಲ್ಲಿ DAP (50 ಕೆಜಿ/ಎಕರೆ) ಮತ್ತು 30 ಹಾಗೂ 60ನೇ ದಿನಗಳಲ್ಲಿ ಯೂರಿಯಾ (35 ಕೆಜಿ/ಎಕರೆ) ನೀಡಿ.\n"
@@ -133,8 +142,9 @@ def get_offline_fallback(query: str, crop: str | None) -> tuple[str, str]:
                 "• **ಟಿಪ್**: ಸುಳಿಗೆ ನೇರವಾಗಿ ಔಷಧಿ ಬೀಳುವಂತೆ ಬೆಳಿಗ್ಗೆ ಅಥವಾ ಸಂಜೆ ಸಿಂಪಡಿಸಿ.", suffix
             )
 
-        # 5. Tomato Disease & Care
-        if c == "tomato" or any(kw in q for kw in ["ಟೊಮ್ಯಾಟೊ", "tomato"]):
+        # 5. Tomato Disease & Care — both spellings: farmers type ಟೊಮೆಟೊ
+        # as well as the standard ಟೊಮ್ಯಾಟೊ.
+        if c == "tomato" or any(kw in q for kw in ["ಟೊಮ್ಯಾಟೊ", "ಟೊಮೆಟೊ", "tomato"]):
             return (
                 "📋 **ಟೊಮೆಟೊ ರೋಗ ಮತ್ತು ಪೋಷಕಾಂಶ ನಿರ್ವಹಣೆ (Tomato Health Guide)**:\n"
                 "• **ವಿಷಯ**: ಕಾಯಿ ಕೊಳೆ, ಅಂಗಮಾರಿ ರೋಗ ಮತ್ತು ಕ್ಯಾಲ್ಸಿಯಂ/ಬೋರಾನ್ ಕೊರತೆಯಿಂದ ಹೂ ಉದುರುವುದು.\n"
@@ -247,8 +257,10 @@ def get_offline_fallback(query: str, crop: str | None) -> tuple[str, str]:
                 "• **Cautions**: Spray Acetamiprid (0.5g/L) or Imidacloprid (0.5ml/L) to eliminate whitefly vectors."
             ), suffix
 
-        # 5. Alkaline Soil pH 7.8, Fertigation & Zinc Sulphate
-        if any(kw in q for kw in ["ph", "alkaline", "zinc", "fertigation", "schedule", "dosage"]):
+        # 5. Alkaline Soil pH 7.8, Fertigation & Zinc Sulphate — whole-word
+        # "ph" and dropped bare "schedule"/"dosage": as substrings they matched
+        # "phosphate" and any fertiliser-schedule question for any crop.
+        if any(kw in q for kw in ["alkaline", "zinc", "fertigation"]) or re.search(r"\bph\b", q):
             return (
                 "📋 **Alkaline Soil (pH 7.8) Fertigation & Zinc Dosage**:\n"
                 "• **Overview**: Alkaline soils restrict natural Zinc and Iron uptake by crop roots.\n"
@@ -256,8 +268,9 @@ def get_offline_fallback(query: str, crop: str | None) -> tuple[str, str]:
                 "• **Cautions**: Do not mix Zinc Sulphate directly with DAP/19-19-19 in the fertigation tank to prevent precipitation."
             ), suffix
 
-        # 6. Fall Armyworm Resistance & Bt Bio-pesticides
-        if any(kw in q for kw in ["bt", "bacillus", "resistance", "armyworm", "biopesticide", "bio-pesticide"]):
+        # 6. Fall Armyworm Resistance & Bt Bio-pesticides — "bt" as a raw
+        # substring matched "subtropical" and similar; require the bare token.
+        if any(kw in q for kw in ["bacillus", "resistance", "armyworm", "biopesticide", "bio-pesticide"]) or re.search(r"\bbt\b", q):
             return (
                 "📋 **Fall Armyworm Resistance & Bt Bio-Pesticide Management**:\n"
                 "• **Overview**: Continuous chemical usage leads to pesticide resistance in Fall Armyworm (*Spodoptera frugiperda*).\n"
