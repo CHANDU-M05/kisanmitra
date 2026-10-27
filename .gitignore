@@ -69,3 +69,6 @@ Thumbs.db
 
 # SSL Certificates
 certbot/
+
+# Local database dumps contain farmer PII — never commit
+*.dump
