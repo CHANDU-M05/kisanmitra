@@ -429,22 +429,38 @@ def test_fetch_pushes_filters_to_the_server():
             return {"records": []}
 
     class FakeSession:
+        headers = {}
         def get(self, url, params=None, timeout=None):
-            captured["url"], captured["params"] = url, params
+            captured.setdefault("calls", []).append(params)
+            captured["url"] = url
             return Resp()
         def close(self):
             pass
 
+    sess = FakeSession()
     out = data_refresh.fetch_window(
         "Tomato", WINDOW_START, TODAY,
-        api_key="test-key", session=FakeSession(),
+        api_key="test-key", session=sess, pace_seconds=0.0,
     )
     assert out == []
+    # NIC's WAF blackholes the default python-requests UA (hangs until
+    # timeout); requests.Session() pre-populates it, so only DIRECT
+    # ASSIGNMENT (not setdefault) overrides it. Pin that.
+    assert "python-requests" not in sess.headers.get("User-Agent", "")
+    assert sess.headers["User-Agent"].startswith("Mozilla/")
     assert captured["url"].startswith("https://api.data.gov.in/resource/")
-    params = captured["params"]
+    # The resource ignores date RANGE filters (verified live 2026-10-27:
+    # every `a:b`/between spelling returns zero records even for dates the
+    # archive contains), so the window must be queried one equality day at
+    # a time — one request per day in [WINDOW_START, TODAY].
+    calls = captured["calls"]
+    expected_days = (TODAY - WINDOW_START).days + 1
+    assert len(calls) == expected_days
+    assert calls[0]["filters[Arrival_Date]"] == f"{WINDOW_START:%d/%m/%Y}"
+    assert calls[-1]["filters[Arrival_Date]"] == f"{TODAY:%d/%m/%Y}"
+    params = calls[0]
     assert params["filters[State]"] == settings.refresh_state
     assert params["filters[Commodity]"] == "Tomato"
-    assert f"{WINDOW_START:%d/%m/%Y}" in params["filters[Arrival_Date]"]
     assert params["api-key"] == "test-key"
 
 
@@ -456,6 +472,7 @@ def test_http_error_becomes_refresh_fetch_error():
             return {}
 
     class FakeSession:
+        headers = {}
         def get(self, url, params=None, timeout=None):
             return Resp()
         def close(self):
@@ -478,6 +495,7 @@ def test_rate_limit_is_reported_as_failure_not_empty_success():
             return {}
 
     class FakeSession:
+        headers = {}
         def get(self, url, params=None, timeout=None):
             return Resp()
         def close(self):
@@ -485,7 +503,8 @@ def test_rate_limit_is_reported_as_failure_not_empty_success():
 
     with pytest.raises(data_refresh.RefreshFetchError, match="429"):
         data_refresh.fetch_window("Tomato", WINDOW_START, TODAY,
-                                  api_key="k", session=FakeSession())
+                                  api_key="k", session=FakeSession(),
+                                  retry_backoff=0.0, pace_seconds=0.0)
 
 
 # ── Scheduler (no network, no database) ───────────────────────────────────────

@@ -32,6 +32,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import time
 from datetime import date, datetime, timedelta, timezone
 from typing import Any, Callable, Iterable, Sequence
 
@@ -235,13 +236,32 @@ def fetch_window(
     max_pages: int = 20,
     timeout: int = 30,
     session: requests.Session | None = None,
+    max_attempts: int = 3,
+    retry_backoff: float = 2.0,
+    pace_seconds: float = 0.4,
 ) -> list[dict]:
     """
     Pull one crop's records for [window_start, window_end] from data.gov.in.
 
-    Filters are pushed to the server (state, commodity, arrival_date range) so a
-    daily refresh costs a handful of requests instead of re-downloading years of
-    history. Raises RefreshFetchError on any upstream problem — the caller turns
+    Queries ONE ARRIVAL DATE AT A TIME with an equality filter. Verified live
+    2026-10-27 against resource 35985678-…: this resource silently returns
+    ZERO records for every date-RANGE spelling tried (`a:b` colon, `filters
+    [..][op]=between`, `field[..][condition][op]=between`, yyyy-mm-dd), while
+    `filters[Arrival_Date]=26/10/2026` correctly returns that day's rows — and
+    the resource does carry same-week data. A range-based refresh therefore
+    looked "upstream had nothing new" forever. Equality per day costs a few
+    more requests (window × pages) but is the only syntax the server honors.
+
+    Per-day requests need server manners: data.gov.in throttles roughly 3
+    req/s per key and, when pushed faster than that, does not answer with 429
+    — it STALLS the connection mid-body (verified live 2026-10-27: single
+    spaced requests answer in ~1s, an unpaced 11-request burst died with a
+    read timeout partway through). `pace_seconds` self-times requests and
+    `max_attempts`/`retry_backoff` absorb intermittent NIC stalls; a truly
+    exhausted retry still raises so the run is marked `failed`, never
+    silently short.
+
+    Raises RefreshFetchError on any upstream problem — the caller turns
     that into a `failed` run rather than a `no_new_data` one.
     """
     if not api_key:
@@ -250,35 +270,40 @@ def fetch_window(
     resource = resource_id or settings.agmarknet_resource_id
     api_crop = CROP_API_NAMES.get(crop, crop)
     http = session or requests.Session()
+    # NIC's WAF silently BLACKHOLES the `python-requests/x.y` User-Agent
+    # against api.data.gov.in — connections neither reject nor answer, they
+    # hang until read timeout (verified 2026-10-27: that UA times out at 30s,
+    # a browser UA answers in 0.4s). NOTE: requests.Session() ships with the
+    # python-requests UA ALREADY in .headers, so headers.setdefault() is a
+    # NO-OP here — it must be a direct assignment. The legacy
+    # scripts/01_download_data.py carried this workaround; it was lost in
+    # the service rewrite and every refresh since failed as "network error".
+    http.headers["User-Agent"] = "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"
     own_session = session is None
 
     records: list[dict] = []
-    offset = 0
-    try:
-        while offset < limit * max_pages:
-            params = {
-                "api-key": api_key,
-                "format": "json",
-                "limit": limit,
-                "offset": offset,
-                "filters[State]": settings.refresh_state,
-                "filters[Commodity]": api_crop,
-                "filters[Arrival_Date]": f"{window_start:%d/%m/%Y}:{window_end:%d/%m/%Y}",
-                "sort": "arrival_date",
-                "sort-type": "DESC",
-            }
+    url = f"https://api.data.gov.in/resource/{resource}"
+
+    def _fetch_page(params: dict) -> list[dict]:
+        for attempt in range(1, max_attempts + 1):
             try:
-                resp = http.get(
-                    f"https://api.data.gov.in/resource/{resource}",
-                    params=params, timeout=timeout,
-                )
+                resp = http.get(url, params=params, timeout=timeout)
             except requests.RequestException as e:
+                if attempt < max_attempts:
+                    time.sleep(retry_backoff * attempt)
+                    continue
                 raise RefreshFetchError(
-                    f"network error fetching {crop}: {redact_secrets(str(e))}"
+                    f"network error fetching {crop} after {max_attempts} "
+                    f"attempts: {redact_secrets(str(e))}"
                 ) from e
 
             if resp.status_code == 429:
-                raise RefreshFetchError(f"rate limited (HTTP 429) while fetching {crop}")
+                if attempt < max_attempts:
+                    time.sleep(retry_backoff * attempt * 2)
+                    continue
+                raise RefreshFetchError(
+                    f"rate limited (HTTP 429) while fetching {crop}"
+                )
             if resp.status_code != 200:
                 raise RefreshFetchError(
                     f"HTTP {resp.status_code} while fetching {crop}: "
@@ -288,12 +313,33 @@ def fetch_window(
                 payload = resp.json()
             except ValueError as e:
                 raise RefreshFetchError(f"unparseable JSON for {crop}") from e
+            return payload.get("records") or []
+        raise AssertionError("unreachable")  # pragma: no cover
 
-            batch = payload.get("records") or []
-            records.extend(batch)
-            if len(batch) < limit:
-                break
-            offset += limit
+    try:
+        day = window_start
+        first_request = True
+        while day <= window_end:
+            offset = 0
+            while offset < limit * max_pages:
+                if not first_request and pace_seconds > 0:
+                    time.sleep(pace_seconds)
+                first_request = False
+                params = {
+                    "api-key": api_key,
+                    "format": "json",
+                    "limit": limit,
+                    "offset": offset,
+                    "filters[State]": settings.refresh_state,
+                    "filters[Commodity]": api_crop,
+                    "filters[Arrival_Date]": f"{day:%d/%m/%Y}",
+                }
+                batch = _fetch_page(params)
+                records.extend(batch)
+                if len(batch) < limit:
+                    break
+                offset += limit
+            day += timedelta(days=1)
     finally:
         if own_session:
             http.close()

@@ -78,6 +78,7 @@ def test_network_failure_carries_no_key(fake_key):
                 datetime.date(2026, 10, 1),
                 datetime.date(2026, 10, 15),
                 api_key=fake_key, limit=100, max_pages=1,
+                retry_backoff=0.0, pace_seconds=0.0,
             )
 
     message = str(excinfo.value)
@@ -96,6 +97,7 @@ def test_http_error_body_is_scrubbed_before_it_becomes_the_failure_reason(fake_k
                 datetime.date(2026, 10, 1),
                 datetime.date(2026, 10, 15),
                 api_key=fake_key, limit=100, max_pages=1,
+                retry_backoff=0.0, pace_seconds=0.0,
             )
     assert fake_key not in str(excinfo.value)
 
