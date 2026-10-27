@@ -76,3 +76,6 @@ certbot/
 
 # credential files that must never be committed
 env.txt
+
+# local data backups (contain PII)
+backups/
