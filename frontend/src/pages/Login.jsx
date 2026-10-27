@@ -11,7 +11,7 @@ export default function Login() {
   const [password, setPassword] = useState('');
   const [error, setError] = useState('');
 
-  const handleLogin = (e) => {
+  const handleLogin = async (e) => {
     e.preventDefault();
     setError('');
 
@@ -19,31 +19,53 @@ export default function Login() {
     formData.append('username', username.trim());
     formData.append('password', password);
 
-    fetch(`${API}/auth/login`, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/x-www-form-urlencoded',
-      },
-      body: formData.toString()
-    })
-    .then(res => {
-      if (!res.ok) throw new Error('Invalid credentials');
-      return res.json();
-    })
-    .then(data => {
-      if (data.access_token) {
-        localStorage.setItem('auth_token', data.access_token);
-        localStorage.setItem('auth_status', 'true'); // Fallback for stale HMR
-        localStorage.setItem('role', 'admin');
-        navigate('/admin');
+    try {
+      const res = await fetch(`${API}/auth/login`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/x-www-form-urlencoded',
+        },
+        body: formData.toString()
+      });
+
+      if (res.ok) {
+        const data = await res.json();
+        if (data.access_token) {
+          localStorage.setItem('auth_token', data.access_token);
+          localStorage.setItem('auth_status', 'true'); // Fallback for stale HMR
+          localStorage.setItem('role', 'admin');
+          navigate('/admin');
+          return;
+        }
+        throw new Error('Malformed response');
       }
-    })
-    .catch(err => {
-      console.error(err);
-      const msg = err.message.includes('429') ? err.message : 'Invalid admin username or password.';
-      toast.error('Login failed');
+
+      // Non-OK: surface the TRUE cause. The old code threw a fixed
+      // 'Invalid credentials' string for every status, so a temporary 429
+      // lockout was indistinguishable from a genuine 401 wrong-password.
+      let detail = '';
+      try { detail = (await res.json()).detail || ''; } catch { /* non-JSON body */ }
+
+      let msg;
+      if (res.status === 429) {
+        msg = detail || 'Too many failed attempts. This account is temporarily locked - wait ~15 minutes and try again.';
+        toast.error('Account temporarily locked');
+      } else if (res.status === 401) {
+        msg = detail || 'Invalid admin username or password.';
+        toast.error('Login failed');
+      } else if (res.status === 422) {
+        msg = 'Login form incomplete - username and password are both required.';
+        toast.error('Missing credentials');
+      } else {
+        msg = `Login failed (server returned ${res.status}). Please try again.`;
+        toast.error('Login failed');
+      }
       setError(msg);
-    });
+    } catch (err) {
+      console.error(err);
+      setError('Could not reach the authentication service. Check your connection and try again.');
+      toast.error('Network error');
+    }
   };
 
   return (

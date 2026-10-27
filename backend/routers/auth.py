@@ -39,7 +39,12 @@ async def login_for_access_token(
             _FAILED_LOGIN_ATTEMPTS.pop(username, None)
             count = 0
 
-    result = await db.execute(select(AdminUser).where(AdminUser.username == form_data.username))
+    # Look up with the SAME normalized value used for lockout tracking. Using
+    # the raw form_data.username here made login case-sensitive: typing "Admin"
+    # failed the (case-sensitive) Postgres comparison, yet each miss incremented
+    # the lockout counter keyed on the lowercased name — so repeated attempts
+    # could lock the legitimate lowercase `admin` account out for 15 minutes.
+    result = await db.execute(select(AdminUser).where(AdminUser.username == username))
     user = result.scalar_one_or_none()
     
     if not user or not verify_password(form_data.password, user.hashed_password):
