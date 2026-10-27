@@ -4,6 +4,7 @@ import { Users, Filter, CheckCircle2, AlertCircle, RefreshCw, Download, ChevronD
 import { toast } from 'react-hot-toast';
 import Card from '../components/ui/Card';
 import { API } from '../config';
+import { identityLabel, isPlatformIdentity, identityKey } from '../identity';
 
 // Server-side audit logging for DPDP Act compliance
 function logAudit(action, target) {
@@ -136,7 +137,8 @@ export default function FarmersView() {
       const q = searchQuery.toLowerCase();
       result = result.filter(item =>
         (item.farmer_name && item.farmer_name.toLowerCase().includes(q)) ||
-        (item.phone && item.phone.includes(q))
+        (item.phone && item.phone.includes(q)) ||
+        (item.sender_id && item.sender_id.includes(q))
       );
     }
     setFilteredDeclarations(result);
@@ -146,10 +148,11 @@ export default function FarmersView() {
     const grouped = [];
     const groups = {};
     filteredDeclarations.forEach(item => {
-      const key = `${item.farmer_name}_${item.phone || ''}`;
+      const key = identityKey(item);
       if (!groups[key]) {
         groups[key] = {
           key, farmer_name: item.farmer_name, phone: item.phone,
+          identity: identityLabel(item), isPlatform: isPlatformIdentity(item),
           district: item.district, taluk: item.taluk,
           total_area: 0, avg_trust: 0, declarations: []
         };
@@ -189,9 +192,9 @@ export default function FarmersView() {
       return;
     }
 
-    const headers = ['Farmer Name', 'Phone', 'District', 'Taluk', 'Crop', 'Acreage', 'Trust Score', 'Satellite Status'];
+    const headers = ['Farmer Name', 'Phone / Identity', 'District', 'Taluk', 'Crop', 'Acreage', 'Trust Score', 'Satellite Status'];
     const rows = filteredDeclarations.map(row => [
-      `"${row.farmer_name}"`, `"${row.phone || ''}"`, `"${row.district}"`, `"${row.taluk || ''}"`,
+      `"${row.farmer_name}"`, `"${identityLabel(row)}"`, `"${row.district}"`, `"${row.taluk || ''}"`,
       `"${row.crop}"`, row.area_acres.toFixed(1), (row.trust_score * 100).toFixed(0) + '%',
       `"${row.satellite_status || 'pending'}"`
     ]);
@@ -296,6 +299,10 @@ export default function FarmersView() {
                         </td>
                         <td className="p-3 font-bold text-slate-900 dark:text-white">{group.farmer_name}</td>
                         <td className="p-3 font-mono select-none">
+                          {group.isPlatform ? (
+                            /* platform ids are not dialled numbers: plain, unmasked, no PII reveal */
+                            <span className="text-slate-600 dark:text-slate-400 text-[11px] font-semibold">{group.identity}</span>
+                          ) : (
                           <div className="flex items-center gap-1.5 justify-between max-w-[140px]">
                             <span className={revealedPhones.has(group.key) ? "text-slate-800 dark:text-slate-200" : "text-slate-500 dark:text-slate-500"}>
                               {revealedPhones.has(group.key) ? group.phone : (group.phone ? group.phone.substring(0, 5) + 'XXXXX' : '—')}
@@ -305,6 +312,7 @@ export default function FarmersView() {
                               {revealedPhones.has(group.key) ? "Hide" : "Reveal"}
                             </button>
                           </div>
+                          )}
                         </td>
                         <td className="p-3 font-semibold text-slate-800 dark:text-slate-300">{group.district}</td>
                         <td className="p-3 font-medium text-slate-700 dark:text-slate-500">{group.taluk || '—'}</td>

@@ -165,6 +165,9 @@ async def summary(db: AsyncSession = Depends(get_db)) -> dict:
         return {
             "total_declarations": 0,
             "total_farmers": 0,
+            "phone_farmers": 0,
+            "platform_users": 0,
+            "unique_identities": 0,
             "districts": master_districts,
             "crops": {c: 0 for c in master_crops},
             "active_pairs": [],
@@ -183,9 +186,24 @@ async def summary(db: AsyncSession = Depends(get_db)) -> dict:
     # Get unique active district-crop pairs
     active_pairs = df[["district", "crop"]].drop_duplicates().to_dict("records")
 
+    # Identity-aware counts (Phase 3). Phones and platform sender ids are
+    # distinct identity spaces; the same person may appear in both (legacy
+    # telegram ids live in `phone`), so identities MERGE on value:
+    #   phone_farmers     — distinct verified-looking mobile numbers (web/WhatsApp/legacy)
+    #   platform_users    — distinct platform sender ids (channel-bearing rows)
+    #   unique_identities — union of the two value sets (same id → one person)
+    # total_farmers keeps its historic meaning (distinct non-null phones) so
+    # existing consumers are unaffected.
+    phones   = {p for p in (d.phone.strip().lower() for d in decls if d.phone) if p}
+    senders  = {s for s in ((getattr(d, "sender_id", None) or "").strip().lower()
+                            for d in decls) if s}
+
     return {
         "total_declarations": len(df),
         "total_farmers":      int(df["phone"].nunique()),
+        "phone_farmers":      len(phones),
+        "platform_users":     len(senders),
+        "unique_identities":  len(phones | senders),
         "districts":          master_districts,
         "crops":              final_crops,
         "active_pairs":       active_pairs,
