@@ -19,6 +19,7 @@ Feature flags are pinned per test (project spec) for determinism.
 """
 from __future__ import annotations
 
+import asyncio
 import datetime
 import re
 from datetime import timezone
@@ -279,27 +280,77 @@ class TestReadPathsNullPhone:
 
 # ── 6. Migration rollback safety (unit) ────────────────────────────────────
 
+def _rows(vals):
+    m = MagicMock()
+    m.all.return_value = vals
+    return m
+
+
+def _col_state():
+    m = MagicMock()
+    m.all.return_value = [("phone", "YES"), ("sender_id", "YES"), ("channel", "YES")]
+    return m
+
+
 class TestRollbackSafety:
 
     @pytest.mark.asyncio
     async def test_rollback_refuses_when_null_phone_has_no_sender_id(self):
         from scripts.tools.migrate_channel_sender_id import rollback_migrations
         conn = AsyncMock()
-        col_rows = MagicMock()
-        col_rows.all.return_value = [("phone", "YES"), ("sender_id", "YES"), ("channel", "YES")]
-        refuse = MagicMock(); refuse.scalar.return_value = 2
-        conn.execute = AsyncMock(side_effect=[col_rows, refuse])
+        conn.execute = AsyncMock(side_effect=[_col_state(), _rows([("5",), ("6",)])])
         with pytest.raises(SystemExit) as exc:
             await rollback_migrations(conn)
-        assert "ROLLBACK REFUSED" in str(exc.value)
+        assert "ROLLBACK REFUSED" in str(exc.value) and "no sender_id" in str(exc.value)
+
+    @pytest.mark.asyncio
+    async def test_rollback_refuses_on_oversize_sender_id(self):
+        """sender_id varchar(64) → phone varchar(20): a >20-char id would truncate."""
+        from scripts.tools.migrate_channel_sender_id import rollback_migrations
+        conn = AsyncMock()
+        conn.execute = AsyncMock(side_effect=[
+            _col_state(), _rows([]), _rows([("42",)]),
+        ])
+        with pytest.raises(SystemExit) as exc:
+            await rollback_migrations(conn)
+        assert "varchar(20)" in str(exc.value)
+
+    @pytest.mark.asyncio
+    async def test_rollback_refuses_on_phone_collision(self):
+        """Re-seed that would duplicate an existing phone row on the legacy unique
+        key must be refused WITH both row ids — not left to a raw IntegrityError."""
+        from scripts.tools.migrate_channel_sender_id import rollback_migrations
+        conn = AsyncMock()
+        conn.execute = AsyncMock(side_effect=[
+            _col_state(), _rows([]), _rows([]), _rows([("101", "7")]),
+        ])
+        with pytest.raises(SystemExit) as exc:
+            await rollback_migrations(conn)
+        assert "collision" in str(exc.value)
+        assert "(101, 7)" in str(exc.value)          # operator sees exactly which pair
+        # nothing mutated: refused before the 4th read consumed any write stmt
+        assert conn.execute.await_count == 4
+
+    @pytest.mark.asyncio
+    async def test_rollback_proceeds_when_all_checks_clean(self):
+        from scripts.tools.migrate_channel_sender_id import rollback_migrations
+        conn = AsyncMock()
+        conn.execute = AsyncMock(side_effect=[
+            _col_state(), _rows([]), _rows([]), _rows([]),
+            MagicMock(), MagicMock(), MagicMock(), MagicMock(), MagicMock(),
+        ])
+        await rollback_migrations(conn)
+        assert conn.execute.await_count == 9         # 4 checks + 5 restore statements
+        reseed_sql = str(conn.execute.await_args_list[4].args[0])
+        assert "SET phone = sender_id" in reseed_sql
 
     @pytest.mark.asyncio
     async def test_rollback_noop_when_columns_absent(self):
         from scripts.tools.migrate_channel_sender_id import rollback_migrations
         conn = AsyncMock()
-        col_rows = MagicMock()
-        col_rows.all.return_value = [("phone", "NO")]
-        conn.execute = AsyncMock(return_value=col_rows)
+        m = MagicMock()
+        m.all.return_value = [("phone", "NO")]
+        conn.execute = AsyncMock(return_value=m)
         await rollback_migrations(conn)          # must not raise, must not touch data
         assert conn.execute.await_count == 1
 
@@ -337,6 +388,16 @@ async def test_live_pg_migration_and_dual_uniqueness():
         async with engine.begin() as conn:
             await apply_migrations(conn)
             await apply_migrations(conn)           # idempotency: second run is a no-op
+
+        # Legacy unique index must survive the migration untouched.
+        async with engine.connect() as c:
+            defs = {str(r[0]): str(r[1]) for r in (await c.execute(sa_text(
+                "SELECT indexname, indexdef FROM pg_indexes WHERE tablename = "
+                "'crop_declarations'"))).all()}
+        assert "uq_decl_phone_crop_district_season" in defs
+        assert "lower((phone)::text)" in defs["uq_decl_phone_crop_district_season"]
+        assert "uq_decl_sender_crop_district_season" in defs
+        assert "IS NOT NULL" in defs["uq_decl_sender_crop_district_season"]
 
         async def _mk(session, **over):
             v = dict(farmer_name="identity-test", phone=None, channel="telegram",
@@ -379,4 +440,157 @@ async def test_live_pg_migration_and_dual_uniqueness():
             await conn.execute(sa_text(
                 "DELETE FROM crop_declarations WHERE sender_id = :x OR phone IN "
                 "('9112223334')"), {"x": SENDER})
+        await engine.dispose()
+
+
+SENDER2 = "4445556667"
+CROP2, DIST2, SEASON2 = "TestConcCrop", "TestConcDistrict", "test_conc_2026"
+
+
+@pytest.mark.asyncio
+async def test_live_pg_concurrent_duplicates_single_row():
+    """Point 2 under real concurrency: two simultaneous raw INSERTs for the same
+    (sender, crop, district, season) — exactly one survives; the app-style
+    concurrent upserts (ON CONFLICT on the partial index) both succeed and still
+    leave exactly one row."""
+    pytest.importorskip("psycopg")
+    from sqlalchemy import func as sa_func
+    from sqlalchemy import text as sa_text
+    from sqlalchemy.dialects.postgresql import insert as pg_insert
+    from sqlalchemy.exc import IntegrityError
+    from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession
+    from sqlalchemy.orm import sessionmaker
+    from backend.core.config import settings
+    from backend.core.models import CropDeclaration
+    from scripts.tools.migrate_channel_sender_id import apply_migrations
+
+    engine = create_async_engine(settings.database_url)
+    try:
+        async with engine.connect() as c:
+            await c.execute(sa_text("SELECT 1"))
+    except Exception:
+        await engine.dispose()
+        pytest.skip("local PostgreSQL not reachable")
+
+    Session = sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
+    async with engine.begin() as conn:
+        await apply_migrations(conn)
+
+    async def _raw_insert(area):
+        async with Session() as s:
+            s.add(CropDeclaration(farmer_name="conc-test", phone=None,
+                                  channel="telegram", sender_id=SENDER2, village="",
+                                  district=DIST2, crop=CROP2, area_acres=area,
+                                  season=SEASON2, trust_score=0.5,
+                                  satellite_status="pending"))
+            await s.commit()
+
+    try:
+        outcomes = await asyncio.gather(_raw_insert(1.0), _raw_insert(2.0),
+                                        return_exceptions=True)
+        errs = [o for o in outcomes if isinstance(o, IntegrityError)]
+        assert len(errs) == 1, f"expected exactly one unique violation, got {outcomes}"
+
+        async with Session() as s:
+            n = (await s.execute(sa_text(
+                "SELECT count(*) FROM crop_declarations WHERE sender_id = :x"),
+                {"x": SENDER2})).scalar()
+        assert n == 1, "partial unique index must hold under concurrent inserts"
+
+        # app-style upsert under concurrency: both succeed, one row remains
+        async def _upsert(area):
+            async with Session() as s:
+                stmt = (pg_insert(CropDeclaration)
+                        .values(farmer_name="conc-test", phone=None, channel="telegram",
+                                sender_id=SENDER2, village="", district=DIST2, crop=CROP2,
+                                area_acres=area, season=SEASON2, trust_score=0.5,
+                                satellite_status="pending")
+                        .on_conflict_do_update(
+                            index_elements=[sa_func.lower(CropDeclaration.sender_id),
+                                            sa_func.lower(CropDeclaration.crop),
+                                            sa_func.lower(CropDeclaration.district),
+                                            CropDeclaration.season],
+                            index_where=sa_text("sender_id IS NOT NULL"),
+                            set_={"area_acres": area}))
+                await s.execute(stmt)
+                await s.commit()
+
+        await asyncio.gather(_upsert(3.0), _upsert(4.0))   # must not raise
+        async with Session() as s:
+            n2 = (await s.execute(sa_text(
+                "SELECT count(*) FROM crop_declarations WHERE sender_id = :x"),
+                {"x": SENDER2})).scalar()
+        assert n2 == 1
+    finally:
+        async with engine.begin() as conn:
+            await conn.execute(sa_text(
+                "DELETE FROM crop_declarations WHERE sender_id = :x"), {"x": SENDER2})
+        await engine.dispose()
+
+
+COLLIDE_PHONE = "8990001112"
+
+
+@pytest.mark.asyncio
+async def test_live_pg_rollback_collision_refusal():
+    """Point 1 on real data: a web phone row and a phone-NULL sender row can
+    legitimately coexist on the same crop/district/season (NULL never conflicts
+    on the phone index). Rollback must detect the re-seed collision, refuse with
+    both ids, and leave the migrated schema and every row completely intact."""
+    pytest.importorskip("psycopg")
+    from sqlalchemy import text as sa_text
+    from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession
+    from sqlalchemy.orm import sessionmaker
+    from backend.core.config import settings
+    from backend.core.models import CropDeclaration
+    from scripts.tools.migrate_channel_sender_id import apply_migrations, rollback_migrations
+
+    engine = create_async_engine(settings.database_url)
+    try:
+        async with engine.connect() as c:
+            await c.execute(sa_text("SELECT 1"))
+    except Exception:
+        await engine.dispose()
+        pytest.skip("local PostgreSQL not reachable")
+
+    Session = sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
+    async with engine.begin() as conn:
+        await apply_migrations(conn)
+
+    try:
+        async with Session() as s:
+            s.add(CropDeclaration(farmer_name="web-side", phone=COLLIDE_PHONE,
+                                  village="", district=DIST2, crop=CROP2,
+                                  area_acres=1.0, season=SEASON2, trust_score=0.5,
+                                  satellite_status="pending"))
+            s.add(CropDeclaration(farmer_name="tg-side", phone=None,
+                                  channel="telegram", sender_id=COLLIDE_PHONE,
+                                  village="", district=DIST2, crop=CROP2,
+                                  area_acres=9.0, season=SEASON2, trust_score=0.5,
+                                  satellite_status="pending"))
+            await s.commit()
+
+        async with engine.connect() as conn:
+            with pytest.raises(SystemExit) as exc:
+                await rollback_migrations(conn)
+            await conn.rollback()
+            assert "collision" in str(exc.value)
+
+        # refused before mutating: tg row still phone=NULL, schema still migrated
+        async with Session() as s:
+            row = (await s.execute(sa_text(
+                "SELECT phone, channel FROM crop_declarations "
+                "WHERE sender_id = :x"), {"x": COLLIDE_PHONE})).all()
+        assert row == [(None, "telegram")]
+        async with engine.connect() as conn:
+            cols = (await conn.execute(sa_text(
+                "SELECT count(*) FROM information_schema.columns WHERE "
+                "table_name='crop_declarations' AND column_name IN "
+                "('channel','sender_id')"))).scalar()
+        assert cols == 2
+    finally:
+        async with engine.begin() as conn:
+            await conn.execute(sa_text(
+                "DELETE FROM crop_declarations WHERE phone = :p OR sender_id = :p"),
+                {"p": COLLIDE_PHONE})
         await engine.dispose()

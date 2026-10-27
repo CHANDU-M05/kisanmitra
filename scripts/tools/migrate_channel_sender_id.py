@@ -33,8 +33,15 @@ Rollback (--rollback) restores the pre-migration shape:
     ALTER TABLE ... ALTER COLUMN phone SET NOT NULL;                     -- aborts if unsafe
     DROP INDEX  uq_decl_sender_crop_district_season;
     ALTER TABLE ... DROP COLUMN sender_id, DROP COLUMN channel;
-Rollback is only exercised while no phone-NULL row lacks a sender_id (guaranteed
-by the write path); the script refuses otherwise.
+Rollback pre-checks refuse — atomically, with the offending row ids — when:
+  * a phone-NULL row has no sender_id to re-seed from, or
+  * a sender_id exceeds varchar(20) (phone column width), or
+  * re-seeding would collide with an existing phone row on the legacy unique key
+    (lower(phone), lower(crop), lower(district), season). This is reachable, not
+    theoretical: a web declaration with a mobile that equals a Telegram user id
+    can coexist with that sender's phone-NULL row, because a phone-NULL row can
+    never conflict on the phone index. The migration state is left untouched in
+    every refusal (the whole rollback runs in one transaction).
 
 Usage (Neon: use the direct/unpooled URL, never prints credentials):
     python -m scripts.tools.migrate_channel_sender_id --apply
@@ -81,21 +88,48 @@ async def _column_state(conn) -> dict:
 
 
 async def rollback_migrations(conn) -> None:
-    """Restore the pre-migration schema. Refuses if any phone-NULL row has no
-    sender_id to re-seed from (re-adding NOT NULL would silently drop data)."""
+    """Restore the pre-migration schema, or refuse with diagnostics.
+
+    All checks run BEFORE any mutation; every statement shares the caller's
+    transaction, so a refusal (or a mid-rollback error) leaves the migrated
+    schema and all declaration rows completely intact.
+    """
     state = await _column_state(conn)
     if "sender_id" not in state:
         print("   nothing to roll back (columns absent) — already legacy schema")
         return
-    null_without_sender = (await conn.execute(text(
-        "SELECT count(*) FROM crop_declarations "
-        "WHERE phone IS NULL AND (sender_id IS NULL OR sender_id = '')"
-    ))).scalar()
-    if null_without_sender:
+    ids = [int(r[0]) for r in (await conn.execute(text(
+        "SELECT id FROM crop_declarations "
+        "WHERE phone IS NULL AND (sender_id IS NULL OR sender_id = '')"))).all()]
+    if ids:
         raise SystemExit(
-            f"ROLLBACK REFUSED: {null_without_sender} row(s) have phone NULL and no "
-            "sender_id to re-seed from. Fix those rows first; refusing to lose data."
-        )
+            f"ROLLBACK REFUSED: {len(ids)} row(s) have phone NULL and no sender_id "
+            f"to re-seed from (ids: {ids[:20]}). Fix those rows first; refusing to lose data.")
+    oversize = [int(r[0]) for r in (await conn.execute(text(
+        "SELECT id FROM crop_declarations WHERE phone IS NULL "
+        "AND sender_id IS NOT NULL AND length(sender_id) > 20"))).all()]
+    if oversize:
+        raise SystemExit(
+            f"ROLLBACK REFUSED: {len(oversize)} row(s) carry sender_id longer than "
+            f"phone varchar(20) (ids: {oversize[:20]}); re-seeding would truncate. "
+            "Resolve those senders manually first.")
+    # Collision: re-seeded phone would duplicate an existing phone-keyed row on
+    # the legacy unique key. Refuse listing both sides so the operator can merge.
+    collisions = (await conn.execute(text(
+        "SELECT a.id, b.id FROM crop_declarations a "
+        "JOIN crop_declarations b "
+        "  ON lower(b.phone) = lower(a.sender_id) "
+        " AND lower(b.crop) = lower(a.crop) "
+        " AND lower(b.district) = lower(a.district) "
+        " AND b.season = a.season "
+        " AND b.id <> a.id "
+        "WHERE a.phone IS NULL AND a.sender_id IS NOT NULL"))).all()
+    if collisions:
+        pairs = [(int(x), int(y)) for x, y in collisions][:20]
+        raise SystemExit(
+            f"ROLLBACK REFUSED: {len(collisions)} re-seed collision(s) with existing "
+            f"phone rows (sender row id, existing phone row id: {pairs}). Merge or "
+            "delete the conflicting pair first; schema state left unchanged.")
     await conn.execute(text(
         "UPDATE crop_declarations SET phone = sender_id "
         "WHERE phone IS NULL AND sender_id IS NOT NULL"
