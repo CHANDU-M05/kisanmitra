@@ -52,19 +52,36 @@ REFRESH_LOCK_KEY = 771_102_451
 # The bot's crop vocabulary -> the exact `Commodity` string AGMARKNET publishes.
 # Mismatches here mean a crop silently stops refreshing, so the reverse map
 # below rewrites whatever the API returns back into our canonical spelling.
+# Ragi/Marigold spellings confirmed live against data.gov.in 2026-10-28:
+# the resource answers exact-equality on `Ragi(Finger Millet)` (NO space) and
+# `Marigold(Calcutta)`; the previous values matched nothing and silently froze
+# both series (Ragi newest row 2025-11-02, Marigold never ingested).
 CROP_API_NAMES: dict[str, str] = {
     "Tomato":    "Tomato",
     "Potato":    "Potato",
     "Onion":     "Onion",
     "Maize":     "Maize",
     "Brinjal":   "Brinjal",
-    "Ragi":      "Ragi (Finger Millet)",
+    "Ragi":      "Ragi(Finger Millet)",
     "Capsicum":  "Capsicum",
     "Cabbage":   "Cabbage",
     "Groundnut": "Groundnut",
-    "Marigold":  "Hybrid Marigold",
+    "Marigold":  "Marigold(Calcutta)",
 }
 _API_NAME_TO_CROP: dict[str, str] = {v.lower(): k for k, v in CROP_API_NAMES.items()}
+
+# Aliases that must land under the SAME canonical storage name, whatever
+# spelling the resource serves. Without these the unspaced source form would
+# normalize via .title() to a second commodity string and split the ragi
+# series against the existing `Ragi (Finger Millet)` history (dedup in
+# run_refresh matches on the stored name, reads only ILIKE). Keys are
+# lowercase; includes the previous config values so a source version rename
+# back to them cannot re-introduce a split.
+_CROP_NAME_ALIASES: dict[str, str] = {
+    "ragi (finger millet)": "Ragi",
+    "hybrid marigold":      "Marigold",
+    "marigold":             "Marigold",
+}
 
 # Rejection reasons (also the vocabulary for monitoring dashboards).
 REJECT_BAD_DATE   = "unparseable_arrival_date"
@@ -138,7 +155,9 @@ def normalize_record(raw: dict) -> dict | None:
     if api_commodity is None:
         return None
     api_commodity = str(api_commodity).strip()
-    crop = _API_NAME_TO_CROP.get(api_commodity.lower(), api_commodity.title())
+    crop = (_API_NAME_TO_CROP.get(api_commodity.lower())
+            or _CROP_NAME_ALIASES.get(api_commodity.lower())
+            or api_commodity.title())
 
     market   = (get("Market", "market") or "").strip()
     district = (get("District", "district") or "").strip()
@@ -354,18 +373,50 @@ async def get_newest_date(db: AsyncSession) -> date | None:
     return _day(newest) if newest is not None else None
 
 
+def canonical_commodity(stored: str) -> str:
+    """Map any commodity spelling — legacy history rows included — to the
+    canonical storage name, so identity-based dedup sees aliases as one."""
+    return _API_NAME_TO_CROP.get(stored.lower()) \
+        or _CROP_NAME_ALIASES.get(stored.lower()) or stored
+
+
+def _commodity_identity_names(crop: str) -> set[str]:
+    """Every spelling that normalizes to `crop` (lowercased), for SQL-side
+    narrowing of existing_keys without dragging the whole table back."""
+    names = {crop.lower()}
+    for key, api in CROP_API_NAMES.items():
+        if key == crop:
+            names.add(api.lower())
+    names |= {alias for alias, canon in _CROP_NAME_ALIASES.items() if canon == crop}
+    # the API name the alias itself resolves to (e.g. 'ragi (finger millet)'
+    # -> Ragi -> also 'ragi(finger millet)')
+    for alias in list(names):
+        canon = _API_NAME_TO_CROP.get(alias) or _CROP_NAME_ALIASES.get(alias)
+        if canon == crop and canon in CROP_API_NAMES:
+            names.add(CROP_API_NAMES[canon].lower())
+    return names
+
+
 async def existing_keys(db: AsyncSession, records: Sequence[dict], crop: str) -> set[tuple]:
-    """Triples already stored in this window, so duplicates are counted for real."""
+    """Triples already stored in this window, so duplicates are counted for real.
+
+    Matched on the CANONICALISED commodity: the ragi history is stored under
+    the legacy `Ragi (Finger Millet)` spelling while refreshes land `Ragi` — a
+    raw equality on `crop` would miss those rows and re-insert the same mandi
+    day under a second name (the series split the alias map exists to prevent).
+    """
     if not records:
         return set()
     days = {r["arrival_date"] for r in records}
     rows = (await db.execute(
         select(MandiPrice.commodity, MandiPrice.market, MandiPrice.arrival_date)
-        .where(MandiPrice.commodity == crop)
+        .where(func.lower(MandiPrice.commodity).in_(_commodity_identity_names(crop)))
         .where(MandiPrice.arrival_date >= _as_utc(min(days)))
         .where(MandiPrice.arrival_date <= _as_utc(max(days)) + timedelta(days=1))
     )).all()
-    return {(str(c).lower(), str(m).lower(), _day(d)) for c, m, d in rows}
+    want = canonical_commodity(crop).lower()
+    return {(canonical_commodity(str(c)).lower(), str(m).lower(), _day(d))
+            for c, m, d in rows if canonical_commodity(str(c)).lower() == want}
 
 
 async def upsert_records(db: AsyncSession, records: Sequence[dict]) -> int:

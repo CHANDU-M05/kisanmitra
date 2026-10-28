@@ -54,7 +54,7 @@ def test_normalize_record_maps_dmi_fields_onto_our_columns():
         "State": "Karnataka",
         "District": "Kolar",
         "Market": "Kolar",
-        "Commodity": "Ragi (Finger Millet)",
+        "Commodity": "Ragi(Finger Millet)",   # exact live source spelling (no space)
         "Variety": "Local",
         "Arrival_Date": "15/10/2026",
         "Min_Price": "2400",
@@ -65,6 +65,42 @@ def test_normalize_record_maps_dmi_fields_onto_our_columns():
     assert rec["commodity"] == "Ragi"
     assert rec["arrival_date"] == datetime.date(2026, 10, 15)
     assert (rec["min_price"], rec["modal_price"], rec["max_price"]) == (2400.0, 2600.0, 2800.0)
+
+
+def test_source_query_names_are_the_live_spellings():
+    """The forward map is an EXACT-equality API filter; a wrong character here
+    silently freezes a series (how Ragi/Marigold broke — verified live
+    2026-10-28: the resource answers zero rows for the old spellings)."""
+    assert data_refresh.CROP_API_NAMES["Ragi"] == "Ragi(Finger Millet)"
+    assert data_refresh.CROP_API_NAMES["Marigold"] == "Marigold(Calcutta)"
+
+
+@pytest.mark.parametrize("api_name,expected", [
+    ("Ragi(Finger Millet)",    "Ragi"),   # live source spelling
+    ("Ragi (Finger Millet)",   "Ragi"),   # legacy/alias spelling — same identity
+    ("ragi(finger millet)",    "Ragi"),   # case-insensitive
+    ("Marigold(Calcutta)",     "Marigold"),
+    ("Hybrid Marigold",        "Marigold"),  # previous config value as alias
+])
+def test_ragi_marigold_spellings_share_one_canonical_identity(api_name, expected):
+    """Split prevention: every spelling must normalize to the same stored
+    commodity, so dedup (exact match on the stored name) cannot let a second
+    series grow beside the `Ragi (Finger Millet)` history."""
+    rec = data_refresh.normalize_record({
+        "State": "Karnataka", "District": "Kolar", "Market": "Kolar",
+        "Commodity": api_name, "Arrival_Date": "15/10/2026", "Modal_Price": "2600",
+    })
+    assert rec["commodity"] == expected
+
+
+def test_unmapped_commodity_falls_back_to_title_unchanged():
+    """The alias map must not swallow crops outside the ten-crop vocabulary —
+    Paddy etc. keep the pre-existing .title() behaviour."""
+    rec = data_refresh.normalize_record({
+        "State": "Karnataka", "District": "Kolar", "Market": "Kolar",
+        "Commodity": "Paddy(Common)", "Arrival_Date": "15/10/2026", "Modal_Price": "1900",
+    })
+    assert rec["commodity"] == "Paddy(Common)".title()
 
 
 def test_normalize_record_without_price_is_not_silently_zeroed():
@@ -294,6 +330,62 @@ async def test_rerunning_a_refresh_does_not_double_count_a_mandi_day():
     finally:
         async with AsyncSessionLocal() as db:
             await db.execute(delete(MandiPrice).where(MandiPrice.commodity == TEST_CROP))
+            await _purge_runs(db, run_ids)
+            await db.commit()
+
+
+@requires_db
+@pytest.mark.asyncio
+async def test_alias_spelling_refresh_cannot_split_the_ragi_series():
+    """The Oct-2026 name-mismatch regression: a source row whose spelling
+    differs from the stored history must NOT land as a second commodity
+    string beside it. Seeded `Ragi (Finger Millet)` history + a same market/
+    date arrival under the live `Ragi(Finger Millet)` spelling → the refresh
+    counts it as already present and inserts nothing; a batch carrying both
+    spellings of one mandi day collapses to a single row via dedupe_records."""
+    from backend.core.database import AsyncSessionLocal
+    from backend.services.data_refresh import _as_utc
+    today = datetime.datetime.now(datetime.timezone.utc).date()
+    run_ids: list[int] = []
+    try:
+        async with AsyncSessionLocal() as db:
+            # Legacy-history shape exactly as the 2023-25 CSV harvest stored it.
+            db.add(MandiPrice(
+                state="Karnataka", district=TEST_DISTRICT, market=TEST_MARKET,
+                commodity="Ragi (Finger Millet)", variety=None,
+                arrival_date=_as_utc(today),
+                min_price=2400.0, max_price=2800.0, modal_price=2600.0,
+            ))
+            await db.commit()
+
+            def fetcher(crop, ws, we):
+                return [
+                    {**_api_row(today), "Commodity": "Ragi(Finger Millet)"},   # live spelling, same day
+                    {**_api_row(today), "Commodity": "Ragi (Finger Millet)"},  # alias twin, same day
+                ]
+
+            summary = await data_refresh.run_refresh(
+                db, trigger="test", fetcher=fetcher, crops=["Ragi"]
+            )
+            run_ids.append(summary["run_id"])
+            # Nothing new is the whole point; a run that inserts nothing is
+            # recorded as no_new_data (never failed), per the 3-outcome contract.
+            assert summary["status"] in ("success", "no_new_data")
+            assert summary["rows_inserted"] == 0, "alias spelling must not create a parallel series"
+
+            rows = (await db.execute(
+                select(MandiPrice.commodity, MandiPrice.market, MandiPrice.arrival_date)
+                .where(func.lower(MandiPrice.commodity).like("ragi%"))
+                .where(MandiPrice.market == TEST_MARKET)
+            )).all()
+            assert len(rows) == 1
+            assert rows[0][0] == "Ragi (Finger Millet)"  # the seeded history row, untouched
+    finally:
+        async with AsyncSessionLocal() as db:
+            await db.execute(delete(MandiPrice).where(
+                MandiPrice.market == TEST_MARKET,
+                func.lower(MandiPrice.commodity).like("ragi%"),
+            ))
             await _purge_runs(db, run_ids)
             await db.commit()
 
