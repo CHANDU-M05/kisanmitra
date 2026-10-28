@@ -1,14 +1,71 @@
-__pycache__/
-*.py[cod]
-*$py.class
-.env
-.venv
-venv/
-env/
+# Build context is always the repository root (see deploy/docker/*.Dockerfile).
+# Patterns are evaluated against paths relative to the context root.
+
+# Version control and workflow internals
 .git
-.gitignore
+.github
+
+# Secrets — the only committed env file is the .env.example template, and the
+# only env file that must reach a build is the frontend's public build-time
+# config (it contains no secrets, only the API base path).
+**/.env
+**/.env.*
+!**/.env.example
+!frontend/.env.production
+
+# Development tooling and caches
+**/node_modules
+**/__pycache__
+**/*.pyc
+**/*.pyo
+**/.pytest_cache
+**/.ruff_cache
+**/.mypy_cache
+**/.venv
+**/venv
+**/catboost_info
+
+# Build outputs (the edge Dockerfile builds its own dist inside the stage)
+**/dist
+**/build
+**/.vite
+**/dev-dist
+
+# Archives, logs and temporary/patch files
+**/*.zip
+**/*.tar.gz
+**/*.log
+**/*.bak
+**/*.orig
+**/*.rej
+*~
+*.patch
+*.diff
+
+# Large datasets and model weights: containers receive them via bind mounts of
+# /var/lib/kisanmitra/data/*, never baked into an image (keeps the context small
+# and releases fast).
+data
+logs
+results
+.checkpoints
+
+# ML/training and review scripts are not part of the runtime service; compose
+# runs scripts/00_init_db.py inside the API container, so scripts root stays.
+scripts/experiments
+scripts/tools
+scripts/results
+
+# Documentation, load tests and host-deployment files are not image content.
+# deploy/caddy and deploy/docker stay: the edge image COPYs the Caddyfile.
+docs
+artifacts
+tests
+deploy/env
+deployment
+deploy/scripts
+
+# Local development files
 .dockerignore
-data/models/*.pkl
-kisanmitra.db
-dashboard/node_modules/
-n8n/
+.gitignore
+README.md

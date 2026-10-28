@@ -1,0 +1,25 @@
+Model,Commodity,Rows,Mean MAPE (%),Median MAPE (%),MAE (₹/q)
+Random Forest (M5 Baseline),Brinjal,7342,47.74,36.18,805.62
+Random Forest (M5 Baseline),Maize,5052,23.67,23.73,516.03
+Random Forest (M5 Baseline),Onion,9845,39.98,29.43,684.87
+Random Forest (M5 Baseline),Potato,7365,24.47,20.51,452.19
+Random Forest (M5 Baseline),Ragi (Finger Millet),3588,20.86,22.11,669.63
+Random Forest (M5 Baseline),Tomato,11380,53.9,42.02,1047.65
+HistGradientBoosting,Brinjal,7342,44.28,36.28,797.04
+HistGradientBoosting,Maize,5052,23.42,23.91,512.21
+HistGradientBoosting,Onion,9845,36.23,27.6,638.73
+HistGradientBoosting,Potato,7365,23.78,19.51,439.33
+HistGradientBoosting,Ragi (Finger Millet),3588,19.49,20.37,628.86
+HistGradientBoosting,Tomato,11380,49.89,40.67,1007.43
+LightGBM,Brinjal,7342,44.74,37.05,811.41
+LightGBM,Maize,5052,23.63,23.81,516.11
+LightGBM,Onion,9845,36.49,28.36,647.7
+LightGBM,Potato,7365,23.9,19.82,440.56
+LightGBM,Ragi (Finger Millet),3588,19.59,20.25,633.08
+LightGBM,Tomato,11380,51.08,41.21,1013.64
+CatBoost,Brinjal,7342,44.4,37.46,811.06
+CatBoost,Maize,5052,23.28,23.82,509.83
+CatBoost,Onion,9845,36.45,27.95,640.96
+CatBoost,Potato,7365,23.69,19.17,434.41
+CatBoost,Ragi (Finger Millet),3588,18.28,19.15,586.0
+CatBoost,Tomato,11380,48.33,39.94,1000.26

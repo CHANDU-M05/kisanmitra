@@ -1,0 +1,36 @@
+# Cloudflare Pages — HTTP response headers.
+#
+# Mirrors the Caddy config on the Oracle stack (deploy/caddy/Caddyfile) so the
+# security posture and cache behaviour are identical on both targets:
+#   - Hashed build assets (/assets/*) carry content hashes → cache forever.
+#   - App shell, service worker and manifest must revalidate every load, or a
+#     returning user stays on a stale bundle after a deploy.
+#   - Security headers match the Caddy `header` block.
+# Cloudflare Pages merges these with its own defaults; rules are top-down, most
+# specific path wins for Cache-Control, and /* applies to every response.
+
+/assets/*
+  Cache-Control: public, max-age=31536000, immutable
+
+/index.html
+  Cache-Control: no-cache
+
+/sw.js
+  Cache-Control: no-cache
+
+/registerSW.js
+  Cache-Control: no-cache
+
+/manifest.webmanifest
+  Cache-Control: no-cache
+
+/workbox-*.js
+  Cache-Control: no-cache
+
+/*
+  Strict-Transport-Security: max-age=31536000; includeSubDomains; preload
+  X-Content-Type-Options: nosniff
+  X-Frame-Options: DENY
+  X-XSS-Protection: 1; mode=block
+  Referrer-Policy: strict-origin-when-cross-origin
+  Permissions-Policy: camera=(), microphone=(), geolocation=()

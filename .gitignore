@@ -1,38 +1,81 @@
-# Python
+# Python & Testing
 venv/
 __pycache__/
 *.pyc
 *.pyo
 *.pyd
 .Python
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+catboost_info/
+.coverage
+htmlcov/
 
-# Model files (too large for GitHub)
+# Node / Frontend
+node_modules/
+dist/
+dev-dist/
+build/
+.vite/
+
+# Archives & Temporary
+*.zip
+*.tar.gz
+*.orig
+*.bak
+*.rej
+*~
+
+# Generated reports and logs (Locust CSV/HTML, app logs)
+locust*.csv
+locust*.html
+*.log
+
+# Model files & Raw Data (too large for GitHub)
 data/models/*.pkl
 data/raw/*.csv
 data/processed/*.csv
 
 # Environment secrets
 .env
+.env.*
+!.env.example
 *.env
 config/
 credentials/
 
-# n8n data
-n8n/data/
+# Local-only review artifacts. Working checkpoints and generated patches diff the
+# real tree, so before the credential redaction they carried live secrets; never
+# commit or ship them (scripts/tools/scrub_secret_exposure.py can clean a copy).
+.checkpoints/
+*.patch
+*.diff
 
-# Database
+# Verification sandboxes created by deploy/load-test dry runs
+.tmp-*/
+.deploy-sandbox*/
+
+# Database & Logs
 *.sql.bak
+*.db
+logs/
 
-# OS
+# OS & IDE
 .DS_Store
 Thumbs.db
-
-# IDE
 .vscode/
 .idea/
 
-# Application logs
-logs/
-
 # SSL Certificates
 certbot/
+
+# Local database dumps contain farmer PII — never commit
+*.dump
+.neon
+
+# credential files that must never be committed
+env.txt
+
+# local data backups (contain PII)
+backups/

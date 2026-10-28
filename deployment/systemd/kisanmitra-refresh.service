@@ -1,0 +1,42 @@
+[Unit]
+Description=KisanMitra AGMARKNET price refresh
+Documentation=https://data.gov.in/resource/agmarknet-market-dayly-crop-price-modality
+After=network-online.target postgresql.service
+Wants=network-online.target
+
+# Paths match deployment/systemd/kisanmitra.service. Both units must move
+# together if the application is ever installed elsewhere; a refresh timer
+# pointing at a directory the app does not live in fails silently at the timer
+# and looks like a quiet market.
+[Service]
+Type=oneshot
+User=kisanmitra
+Group=kisanmitra
+WorkingDirectory=/home/kisanmitra/kisanmitra
+# .env must be readable by this user and by nothing else:
+#   chown root:kisanmitra /home/kisanmitra/kisanmitra/.env
+#   chmod 0640            /home/kisanmitra/kisanmitra/.env
+EnvironmentFile=/home/kisanmitra/kisanmitra/.env
+ExecStart=/home/kisanmitra/kisanmitra/venv/bin/python scripts/refresh_prices.py
+TimeoutStartSec=900
+Nice=10
+
+# scripts/refresh_prices.py exits 0 on success and on "upstream published nothing
+# newer", 3 when another worker already holds the advisory lock, 1 on a genuine
+# fetch/write problem and 4 when DATA_GOV_API_KEY is missing.
+# 3 is a normal collision (the in-process scheduler may be mid-run), so it must
+# not be recorded as a unit failure — but 1 and 4 must be.
+SuccessExitStatus=0 3
+
+# The unit only needs to read the repo and write its own logs/data directories.
+# ProtectHome is deliberately NOT set: the application lives under /home and the
+# refresh writes logs/kisanmitra.log there, so read-only /home would break it.
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=full
+ProtectKernelTunables=true
+RestrictSUIDSGID=true
+UMask=0077
+
+[Install]
+WantedBy=multi-user.target

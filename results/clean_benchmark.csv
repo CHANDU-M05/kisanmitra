@@ -1,0 +1,9 @@
+Model,MAPE (%),RMSE (Rs),MAE (Rs),R² Score,Time (s),Split
+KNN Regressor,18.51,524.69,361.77,0.4289,0.1,Chronological 80/20
+SVR,18.78,522.17,355.58,0.4344,2.1,Chronological 80/20
+Ridge Regression,19.14,521.75,354.55,0.4353,0.0,Chronological 80/20
+Linear Regression,19.14,521.76,354.55,0.4353,0.0,Chronological 80/20
+Gradient Boosting,19.26,534.46,359.16,0.4075,5.7,Chronological 80/20
+Random Forest,19.41,537.29,362.87,0.4012,1.0,Chronological 80/20
+Decision Tree,19.85,540.88,372.73,0.3931,0.0,Chronological 80/20
+"ARIMA(5,1,0)",21.53,,,,0.7,Chronological 80/20

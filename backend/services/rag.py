@@ -1,0 +1,523 @@
+"""
+backend/services/rag.py — Vertical Slice 4 (RAG Pipeline)
+
+Generative AI layer for the KisanMitra WhatsApp Bot and Farmer Advisory Console.
+Retrieves context from PostgreSQL via pgvector and generates
+high-fidelity agronomy advice using Gemini 1.5 Pro.
+"""
+from __future__ import annotations
+
+import asyncio
+import logging
+import re
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
+from langchain_google_genai import GoogleGenerativeAIEmbeddings, ChatGoogleGenerativeAI
+from langchain_core.prompts import ChatPromptTemplate
+from langchain_core.output_parsers import StrOutputParser
+
+from backend.core.config import settings
+from backend.core.models import KnowledgeChunk, _HAS_PGVECTOR
+
+logger = logging.getLogger("kisanmitra.rag")
+
+# Initialize models only if API key is present
+_embeddings = None
+_llm = None
+
+if settings.gemini_api_key and settings.gemini_api_key.get_secret_value() != "fill_this_later" and settings.gemini_api_key.get_secret_value() != "":
+    try:
+        _embeddings = GoogleGenerativeAIEmbeddings(
+            # gemini-embedding-001 replaces text-embedding-004, which Google
+            # removed from v1beta (404 NOT_FOUND since 2026). output_dimensionality
+            # pins 768-d vectors so ingest and query stay in ONE semantic space
+            # and match Vector(768) in backend/core/models.py. If this model is
+            # ever deprecated again, embed_text() logs the failure — check for
+            # silent keyword-fallback before blaming retrieval ranking.
+            model="models/gemini-embedding-001",
+            google_api_key=settings.gemini_api_key.get_secret_value(),
+            output_dimensionality=768,
+        )
+        
+        # Primary: Gemini 2.5 Flash for fast, robust generative advisory.
+        try:
+            _llm = ChatGoogleGenerativeAI(
+                model="gemini-2.5-flash", 
+                google_api_key=settings.gemini_api_key.get_secret_value(), 
+                temperature=0.1
+            )
+            logger.info("RAG: Initialized Gemini 2.5 Flash LLM.")
+        except Exception as pro_ex:
+            logger.warning(f"RAG: Failed to load gemini-2.5-flash: {pro_ex}")
+            _llm = None
+    except Exception as e:
+        logger.error(f"Failed to initialize Gemini components: {e}")
+
+
+def is_kannada(text: str) -> bool:
+    """Detect if the text contains any Kannada Unicode characters."""
+    return any('\u0c80' <= char <= '\u0cff' for char in text)
+
+
+def get_offline_fallback(query: str, crop: str | None) -> tuple[str, str]:
+    """
+    Returns (fallback_msg, suffix) depending on query language and keywords.
+    Matches queries dynamically with expert precision for all agronomy, disease, pest, and fertilizer topics.
+    """
+    is_kn = is_kannada(query)
+    q = query.lower()
+    c = (crop or "").lower()
+
+    if is_kn:
+        suffix = "🌾 (ಆಫ್‌ಲೈನ್ ಸಲಹೆ)"
+
+        # 0. Crop Rotation & Soil Nitrogen Restoration (Kannada)
+        if any(kw in q for kw in ["ಪರಿವರ್ತನೆ", "ಸಾರಜನಕ", "ಕಡಲೆಕಾಯಿ", "rotation", "rotate", "nitrogen"]):
+            return (
+                "📋 **ಮೆಕ್ಕೆಜೋಳ ನಂತರ ಬೆಳೆ ಪರಿವರ್ತನೆ ಮತ್ತು ಸಾರಜನಕ ನಿರ್ವಹಣೆ (Crop Rotation & Soil Nitrogen Restoration)**:\n"
+                "• **ವಿಷಯ**: ಮೆಕ್ಕೆಜೋಳದಂತಹ ಧಾನ್ಯಗಳ ನಂತರ ದ್ವಿದಳ ಧಾನ್ಯಗಳನ್ನು (ಕಡಲೆಕಾಯಿ/ಅಲಸಂದಿ) ಬೆಳೆಯುವುದರಿಂದ ಮಣ್ಣಿನಲ್ಲಿ ಸಾರಜನಕ (Nitrogen) ಪ್ರಮಾಣ ನೈಸರ್ಗಿಕವಾಗಿ ಹೆಚ್ಚಾಗುತ್ತದೆ.\n"
+                "• **ಕ್ರಮಗಳು**: ಮೆಕ್ಕೆಜೋಳ ಕಟಾವಿನ ನಂತರ ಕಡಲೆಕಾಯಿ (Groundnut) ಬೆಳೆಯಿರಿ. ಇವುಗಳ ಬೇರುಗಳಲ್ಲಿರುವ ರೈಜೋಬಿಯಂ ಬ್ಯಾಕ್ಟೀರಿಯಾಗಳು ಎಕರೆಗೆ 15-25 ಕೆಜಿ ಸಾರಜನಕವನ್ನು ಮಣ್ಣಿಗೆ ಒದಗಿಸುತ್ತವೆ.\n"
+                "• **ಟಿಪ್**: ಬಿತ್ತನೆಗೆ ಮುನ್ನ ಬೀಜಕ್ಕೆ 200 ಗ್ರಾಂ ರೈಜೋಬಿಯಂ ಜೈವಿಕ ಗೊಬ್ಬರವನ್ನು ಲೇಪಿಸಿ ಬಿತ್ತನೆ ಮಾಡಿ.", suffix
+            )
+
+        # 1. Stem Rot & Thundu Roga (Potato/Tomato)
+        if any(kw in q for kw in ["thundu", "stem rot", "thundu roga", "ಕಾಂಡ ಕೊಳೆ"]):
+            return (
+                "📋 **ಕಾಂಡ ಕೊಳೆ ಮತ್ತು ತುಂಡು ರೋಗ ನಿರ್ವಹಣೆ (Stem Rot / Thundu Roga Guide)**:\n"
+                "• **ವಿಷಯ**: ಮಣ್ಣಿನಲ್ಲಿ ಬೆಳೆಯುವ ಸ್ಕ್ಲೆರೋಷಿಯಂ (Sclerotium) ಶೀಲಿಂಧ್ರದಿಂದ ಕಾಂಡ ತಳಭಾಗದಲ್ಲಿ ಕೊಳೆತು ಗಿಡ ಮುರಿದು ಬೀಳುತ್ತದೆ.\n"
+                "• **ಕ್ರಮಗಳು**: ಕಾರ್ಬಂಡಾಜಿಮ್ 50 WP (1g/L) ಅಥವಾ ಸೈಪ್ರೊಕೊನಜೋಲ್ (1ml/L) ಕಾಂಡದ ಬುಡಕ್ಕೆ ನೀಡಿ. ಟ್ರೈಕೋಡರ್ಮಾ ಹರ್ಜಿಯಾನಮ್ (2kg/ಎಕರೆ) ಗೊಬ್ಬರದ ಜೊತೆ ನೀಡಿ.\n"
+                "• **ಟಿಪ್**: ಜಮೀನಿನಲ್ಲಿ ನೀರು ನಿಲ್ಲದಂತೆ ನೋಡಿಕೊಳ್ಳಿ ಮತ್ತು ಸೋಂಕಿತ ಗಿಡಗಳನ್ನು ತಕ್ಷಣ ಕಿತ್ತು ನಾಶಪಡಿಸಿ.", suffix
+            )
+
+        # 2. Root-Knot Nematode & Gantu Hula (Brinjal/Capsicum)
+        if any(kw in q for kw in ["gantu", "nematode", "nematodes", "gantu hula", "ಗಂಟು ಹುಳು"]):
+            return (
+                "📋 **ಬೇರು ಗಂಟು ಹುಳು ನಿರ್ವಹಣೆ (Root-Knot Nematode / Gantu Hula Guide)**:\n"
+                "• **ವಿಷಯ**: ಮಣ್ಣಿನಲ್ಲಿರುವ ನೆಮಟೋಡ್ಸ್ (Nematodes) ಬೇರುಗಳಲ್ಲಿ ಗಂಟುಗಳನ್ನು ಉಂಟುಮಾಡಿ ಗಿಡ ಹಳದಿಯಾಗುವಂತೆ ಮಾಡುತ್ತವೆ.\n"
+                "• **ಕ್ರಮಗಳು**: ಪ್ಯೂಸಿಲೋಮೈಸಿಸ್ ಲೈಲಾಸಿನಸ್ (2kg/ಎಕರೆ) ಜೈವಿಕ ನೆಮಟಿಸೈಡ್ ಅಥವಾ ಫ್ಲೂಪೈರಾಮ್ (Fluopyram @ 1ml/L) ಬೇರಿಗೆ ನೀಡಿ.\n"
+                "• **ಟಿಪ್**: ಸಾಲುಗಳ ಮಧ್ಯೆ ಚೆಂಡುಹೂ (Marigold) ಬೆಳೆಯುವುದರಿಂದ ನೆಮಟೋಡ್ಸ್ ಸಂಖ್ಯೆ ಗಣನೀಯವಾಗಿ ಕಡಿಮೆಯಾಗುತ್ತದೆ.", suffix
+            )
+
+        # 3. Potato Potash & Tuber Enlargement — gated on potato context:
+        # bare "ದಪ್ಪ" (thick) / "size" matched every "make X bigger" question.
+        if c == "potato" or any(kw in q for kw in ["ಗಡ್ಡೆ", "ಆಲೂ", "potash", "tuber"]):
+            return (
+                "📋 **ಆಲೂಗಡ್ಡೆ ಗಡ್ಡೆ ದಪ್ಪಗಾಗಿಸುವ ಮತ್ತು ಪೊಟ್ಯಾಶ್ ನಿರ್ವಹಣೆ (Potato Tuber Bulking & Potash Guide)**:\n"
+                "• **ವಿಷಯ**: ಗಡ್ಡೆ ಕಟ್ಟುವ ಮತ್ತು ದಪ್ಪಗಾಗುವ ಹಂತದಲ್ಲಿ (45-60 ದಿನಗಳು) ಪೊಟ್ಯಾಶ್ ಪೋಷಕಾಂಶ ಅತ್ಯಗತ್ಯ.\n"
+                "• **ಕ್ರಮಗಳು**: ಬಿತ್ತನೆ ನಂತರ 45 ಮತ್ತು 60ನೇ ದಿನಕ್ಕೆ 13:0:45 (ಪೊಟ್ಯಾಶಿಯಂ ನೈಟ್ರೇಟ್) 10g/L ಅಥವಾ SOP (0:0:50) 5g/L ನೀರಿನಲ್ಲಿ ಬೆರೆಸಿ ಸಿಂಪಡಿಸಿ.\n"
+                "• **ಟಿಪ್**: ಮಣ್ಣಿಗೆ ಪ್ರತಿ ಎಕರೆಗೆ 30 ಕೆಜಿ MOP ಗೊಬ್ಬರ ನೀಡಿ ಮತ್ತು ಹಗುರವಾಗಿ ನೀರು ಹಾಯಿಸಿ.", suffix
+            )
+
+        # 4. Capsicum/Tomato Wilt & Drenching — "ಸಿಂಪಡಿಸಿ" (bare "spray") dropped:
+        # it is a stopword in advisory questions, not a wilt signal.
+        if any(kw in q for kw in ["sudu", "sagida", "ವೈಲ್ಟ್", "drenching", "drench", "bactericide"]):
+            return (
+                "📋 **ಬ್ಯಾಕ್ಟೀರಿಯಲ್ ವೈಲ್ಟ್ ಮತ್ತು ವಾಡಿ ಹೋಗುವ ರೋಗ ನಿರ್ವಹಣೆ (Bacterial Wilt & Drenching Guide)**:\n"
+                "• **ವಿಷಯ**: ಮಣ್ಣಿನಲ್ಲಿ ಮೂಲದ ಬ್ಯಾಕ್ಟೀರಿಯಾ ಅಥವಾ ಶಿಲೀಂಧ್ರದಿಂದ ಗಿಡಗಳು ಹಠಾತ್ ಒಣಗುತ್ತವೆ.\n"
+                "• **ಕ್ರಮಗಳು**: ಕಾಂಡದ ಬುಡಕ್ಕೆ ಕಾಪರ್ ಆಕ್ಸಿಕ್ಲೋರೈಡ್ (3g/L) + ಸ್ಟ್ರೆಪ್ಟೋಸೈಕ್ಲಿನ್ (0.5g/10L) ಬೆರೆಸಿ ಬೇರು ನೆನೆಯುವಂತೆ (Drenching) ನೀಡಿ.\n"
+                "• **ಟಿಪ್**: ಡ್ರಿಪ್ ಮೂಲಕ 19:19:19 ಗೊಬ್ಬರವನ್ನು 3 ಕೆಜಿ/ಎಕರೆ ನೀಡಿ ಮತ್ತು ಜಮೀನಿನಲ್ಲಿ ನೀರು ನಿಲ್ಲದಂತೆ ನೋಡಿಕೊಳ್ಳಿ.", suffix
+            )
+
+        # 3. Onion Neck Rot & Thrips — gated: "ಕೊಳೆ"/"rot" alone match every
+        # rot disease question (stem rot, neck rot, bulb rot …).
+        if c == "onion" or any(kw in q for kw in ["ತಿಗಣೆ", "ಕುತ್ತಿಗೆ", "ನೇರಳೆ", "ಈರುಳ್ಳಿ", "thrips"]):
+            return (
+                "📋 **ಈರುಳ್ಳಿ ಎಲೆ ತಿಗಣೆ ಮತ್ತು ಕುತ್ತಿಗೆ ಕೊಳೆ ರೋಗ ನಿರ್ವಹಣೆ (Onion Thrips & Neck Rot)**:\n"
+                "• **ವಿಷಯ**: ಎಲೆ ತಿಗಣೆ (Thrips) ಎಲೆಗಳನ್ನು ಗೀರಿದ್ದರೆ, ಕುತ್ತಿಗೆ ಕೊಳೆ ಗಡ್ಡೆಯನ್ನು ಹಾನಿಗೊಳಿಸುತ್ತದೆ.\n"
+                "• **ಕ್ರಮಗಳು**: ತಿಗಣೆ ನಿಯಂತ್ರಣಕ್ಕೆ ಫಿಪ್ರೋನಿಲ್ (2ml/L) ಅಥವಾ ಸ್ಪಿನೆಟೋರಾಮ್ (0.9ml/L) ಸಿಂಪಡಿಸಿ. ಕೊಳೆ ರೋಗಕ್ಕೆ ಸಾಫ್ (2g/L) ಸಿಂಪಡಿಸಿ.\n"
+                "• **ಟಿಪ್**: ಈರುಳ್ಳಿ ಎಲೆ ನಯವಾಗಿರುವುದರಿಂದ ಸಿಂಪಡಿಸುವಾಗ 0.5ml/L ಆಂಟಿ-ಸ್ಟಿಕ್ಕರ್ (ಅಂಟು) ಬೆರೆಸಿ.", suffix
+            )
+
+        # 4. Maize Fall Armyworm & Fertilizers — MUST be maize-context.
+        # "ಗೊಬ್ಬರ" (fertilizer), "ಯೂರಿಯಾ" and "dap" are crop-agnostic words;
+        # when they sat in this rule's trigger list a Tomato fertilizer question
+        # was answered with maize DAP/urea advice (incident 2026-10-27, and the
+        # explicit crop selection in the UI could not save it because this rule
+        # is checked BEFORE the tomato rule).
+        if c == "maize" or any(kw in q for kw in ["ಸೈನಿಕ ಹುಳು", "ಸೈನಿಕ", "armyworm", "ಮೆಕ್ಕೆಜೋಳ"]):
+            return (
+                "📋 **ಮೆಕ್ಕೆಜೋಳ ಪೋಷಕಾಂಶ ಮತ್ತು ಸೈನಿಕ ಹುಳು ನಿರ್ವಹಣೆ (Maize Nutrition & Pest Control)**:\n"
+                "• **ಗೊಬ್ಬರ**: ಬಿತ್ತನೆ ಸಮಯದಲ್ಲಿ DAP (50 ಕೆಜಿ/ಎಕರೆ) ಮತ್ತು 30 ಹಾಗೂ 60ನೇ ದಿನಗಳಲ್ಲಿ ಯೂರಿಯಾ (35 ಕೆಜಿ/ಎಕರೆ) ನೀಡಿ.\n"
+                "• **ಕೀಟ ಬಾಧೆ**: ಸೈನಿಕ ಹುಳು (Fall Armyworm) ನಿಯಂತ್ರಣಕ್ಕೆ ಎಲೆ ಸುಳಿಯಲ್ಲಿ ಇಮಾಮೆಕ್ಟಿನ್ ಬೆಂಜೋಯೇಟ್ (0.4g/L) ಅಥವಾ ಬಾಸಿಲಸ್ ತುರಿಂಜಿಯೆನ್ಸಿಸ್ (Bt) ಸಿಂಪಡಿಸಿ.\n"
+                "• **ಟಿಪ್**: ಸುಳಿಗೆ ನೇರವಾಗಿ ಔಷಧಿ ಬೀಳುವಂತೆ ಬೆಳಿಗ್ಗೆ ಅಥವಾ ಸಂಜೆ ಸಿಂಪಡಿಸಿ.", suffix
+            )
+
+        # 5. Tomato Disease & Care — both spellings: farmers type ಟೊಮೆಟೊ
+        # as well as the standard ಟೊಮ್ಯಾಟೊ.
+        if c == "tomato" or any(kw in q for kw in ["ಟೊಮ್ಯಾಟೊ", "ಟೊಮೆಟೊ", "tomato"]):
+            return (
+                "📋 **ಟೊಮೆಟೊ ರೋಗ ಮತ್ತು ಪೋಷಕಾಂಶ ನಿರ್ವಹಣೆ (Tomato Health Guide)**:\n"
+                "• **ವಿಷಯ**: ಕಾಯಿ ಕೊಳೆ, ಅಂಗಮಾರಿ ರೋಗ ಮತ್ತು ಕ್ಯಾಲ್ಸಿಯಂ/ಬೋರಾನ್ ಕೊರತೆಯಿಂದ ಹೂ ಉದುರುವುದು.\n"
+                "• **ಕ್ರಮಗಳು**: ಎಲೆ ಚುಕ್ಕೆ/ಅಂಗಮಾರಿಗೆ ಸಿಮೋಕ್ಸಾನಿಲ್ + ಮ್ಯಾಂಕೋಜೆಬ್ (2g/L) ಸಿಂಪಡಿಸಿ. ಹೂ ಕಟ್ಟಲು ಬೋರಾನ್ (1g/L) ಸಿಂಪಡಿಸಿ.\n"
+                "• **ಟಿಪ್**: ಪ್ರತಿ ಎಕರೆಗೆ 60 ಕೆಜಿ N, 50 ಕೆಜಿ P, ಮತ್ತು 50 ಕೆಜಿ K ಸಮತೋಲಿತವಾಗಿ ನೀಡಿ.", suffix
+            )
+
+        # Default Kannada agronomy response
+        return (
+            "📋 **ಬೆಳೆ ರಕ್ಷಣೆ ಮತ್ತು ಪೋಷಕಾಂಶ ನಿರ್ವಹಣೆ (KisanMitra Crop Care)**:\n"
+            "• **ನೀರಾವರಿ**: ಮಣ್ಣಿನ ತೇವಾಂಶಕ್ಕೆ ಅನುಗುಣವಾಗಿ ಸಮತೋಲಿತ ನೀರಾವರಿ ನೀಡಿ.\n"
+            "• **ಗೊಬ್ಬರ**: ಸಾರಜನಕ, ರಂಜಕ ಮತ್ತು ಪೊಟ್ಯಾಶ್ (NPK) ಗೊಬ್ಬರಗಳನ್ನು ಬೆಳವಣಿಗೆಯ ಹಂತಕ್ಕೆ ತಕ್ಕಂತೆ ನೀಡಿ.\n"
+            "• **ರಕ್ಷಣೆ**: ಕೀಟ ಅಥವಾ ರೋಗ ಬಾಧೆ ಕಂಡುಬಂದಲ್ಲಿ ಜೈವಿಕ ಕೀಟನಾಶಕ ಅಥವಾ ಸೂಕ್ತ ಶಿಲೀಂಧ್ರನಾಶಕ ಸಿಂಪಡಿಸಿ.", suffix
+        )
+
+    else:
+        suffix = "🌾 (Offline Advice)"
+
+        # 0. Stem Rot & Thundu Roga (Potato/Tomato)
+        if any(kw in q for kw in ["thundu", "stem rot", "thundu roga", "sclerotium"]):
+            return (
+                "📋 **Stem Rot & Thundu Roga Management**:\n"
+                "• **Overview**: Soil-borne *Sclerotium rolfsii* fungus causes collar rot, wilting, and stem collapse.\n"
+                "• **Actionable Steps**: Drench root zone with Carbendazim 50 WP (1g/L) or Tebuconazole (1ml/L). Enrich soil with *Trichoderma harzianum* (2kg/acre in 100kg FYM).\n"
+                "• **Cautions**: Remove infected plants immediately and avoid water stagnation near plant stems."
+            ), suffix
+
+        # 0b. Brinjal Dual-Pest: Root-Knot Nematodes & Fruit Borer
+        if (c == "brinjal" or "brinjal" in q) and ("borer" in q or "fruit borer" in q or "gantu" in q or "nematode" in q):
+            return (
+                "📋 **Brinjal Dual-Pest Control: Nematodes & Fruit Borer**:\n"
+                "• **Overview**: Managing BOTH Root-Knot Nematodes (*Meloidogyne*) and Fruit & Shoot Borer (*Leucinodes orbonalis*) requires a combined soil drench + foliar protocol.\n"
+                "• **Soil Drenching (Nematodes)**: Drench root zone with *Purpureocillium lilacinum* (2kg/acre) or Fluopyram (1ml/L water) at 150ml solution per plant.\n"
+                "• **Foliar Spray (Fruit Borer)**: Spray Emamectin Benzoate 5% SG (0.4g/L) or Chlorantraniliprole 18.5% SC (0.3ml/L) at 15-day intervals during flowering.\n"
+                "• **Integrated Protocol**: Drench soil first, then apply foliar spray 48 hours later. Intercrop Marigold as a natural trap crop."
+            ), suffix
+
+        # 0c. Crop Rotation & Nitrogen Restoration
+        if any(kw in q for kw in ["rotate", "rotation", "restore nitrogen", "ragi or groundnut", "after harvesting", "post-kharif"]):
+            return (
+                "📋 **Kharif Crop Rotation & Soil Nitrogen Restoration**:\n"
+                "• **Overview**: Rotating heavy-feeding cereals (Maize/Ragi) with legumes (Groundnut/Cowpea) restores soil organic nitrogen.\n"
+                "• **Actionable Steps**: Rotate post-Kharif Maize with Groundnut or Cowpea. Legume root nodules fix atmospheric nitrogen (20–40 kg N/ha).\n"
+                "• **Cautions**: Treat legume seeds with *Rhizobium* culture (200g/acre) prior to sowing for maximum nitrogen fixation."
+            ), suffix
+
+        # 0ca. Maize Fall Armyworm (FAW) Whorl Treatment
+        if c == "maize" or any(kw in q for kw in ["fall armyworm", "faw", "spodoptera", "whorl"]):
+            return (
+                "📋 **Maize Fall Armyworm (FAW / Spodoptera) Whorl Treatment**:\n"
+                "• **Overview**: Invasive Fall Armyworm (*Spodoptera frugiperda*) larvae feed inside central plant whorls causing leaf damage.\n"
+                "• **Actionable Steps**: Apply Emamectin Benzoate 5% SG (0.4g/L water) or Chlorantraniliprole 18.5% SC (0.4ml/L water) directly into plant central whorls.\n"
+                "• **Cautions**: Apply spray early morning or late evening when caterpillars are actively feeding inside whorls."
+            ), suffix
+
+        # 0d. Tomato & Marigold Trap Crop Intercropping
+        if any(kw in q for kw in ["marigold", "trap crop"]) or ("intercrop" in q and ("tomato" in q or "borer" in q or "nematode" in q)):
+            return (
+                "📋 **Tomato & Marigold Trap Crop Intercropping (Fruit Borer & Nematode Control)**:\n"
+                "• **Overview**: Intercropping Marigold (*Tagetes erecta*) with Tomato controls BOTH Fruit Borer (*Helicoverpa armigera*) and Root-Knot Nematodes (*Meloidogyne*).\n"
+                "• **Fruit Borer Action**: Marigold flowers attract adult *Helicoverpa* moths away from Tomato to lay eggs on marigold buds, where larvae can be selectively sprayed with Bt (2g/L).\n"
+                "• **Nematode Action**: Marigold roots release alpha-terthienyl compounds that naturally eliminate root-knot nematodes in the soil.\n"
+                "• **Planting Pattern**: Plant 1 row of Marigold for every 10–12 rows of Tomato (or 1 marigold plant every 16 tomato plants)."
+            ), suffix
+
+        # 0e. Cabbage NPK Basal & Fertigation Schedule
+        if c == "cabbage" or any(kw in q for kw in ["cabbage", "red soil", "basal dose"]):
+            return (
+                "📋 **Cabbage NPK Basal & Fertigation Schedule (Red Soil)**:\n"
+                "• **Overview**: Cabbage requires high Nitrogen and Potassium for head formation, with balanced Phosphorus in porous red soil.\n"
+                "• **Basal Dose**: Apply FYM (10 tons/acre) + 60kg N, 50kg P, 50kg K per acre during land preparation.\n"
+                "• **Fertigation Schedule**: Drip fertigate 19:19:19 (3kg/acre/week) during vegetative phase (weeks 2–5), followed by 13:0:45 (4kg/acre/week) during head initiation (weeks 6–9).\n"
+                "• **Cautions**: Apply Boron (1kg/acre) and Calcium Nitrate (5kg/acre) at day 35 to prevent hollow stem disorder."
+            ), suffix
+
+        # 1. Onion Triple Threat: Purple Blotch, Downy Mildew & Thrips
+        if c == "onion" or any(kw in q for kw in ["onion", "purple blotch", "downy mildew", "thrips", "ನೇರಳೆ"]):
+            return (
+                "📋 **Onion Integrated Disease & Thrips Control**:\n"
+                "• **Thrips & Purple Blotch**: Spray Fipronil 5% SC (2ml/L) + Saaf (Mancozeb + Carbendazim @ 2g/L) with 0.5ml/L spreader sticker.\n"
+                "• **Downy Mildew**: Spray Metalaxyl 8% + Mancozeb 64% WP (2.5g/L) at 10-day intervals during high humidity.\n"
+                "• **Neck Rot**: Apply Copper Oxychloride (3g/L) 15 days prior to harvest to prevent post-harvest bulb storage rot."
+            ), suffix
+
+        # 2. Potato Potash & Tuber Bulking
+        if any(kw in q for kw in ["tuber", "potash", "enlargement", "bulking", "size", "potatoes"]):
+            return (
+                "📋 **Potato Tuber Bulking & Potash Management**:\n"
+                "• **Overview**: Potassium is essential during the tuber expansion stage (45–75 days post-planting).\n"
+                "• **Actionable Steps**: Spray Sulphate of Potash (SOP 0:0:50) @ 5g/L or 13:0:45 @ 10g/L at 45 and 60 days post-sowing.\n"
+                "• **Cautions**: Apply 30kg/acre MOP in soil during earthing-up. Avoid excess nitrogen after day 45."
+            ), suffix
+
+        # 3. Capsicum / Tomato Bacterial Wilt & Drenching Volume
+        if any(kw in q for kw in ["wilt", "bactericide", "copper oxychloride", "sudu", "sagida", "drenching", "drench"]):
+            return (
+                "📋 **Bacterial Wilt & Soil Drenching Management (Greenhouse/Field)**:\n"
+                "• **Overview**: Bacterial wilt (*Ralstonia solanacearum*) causes sudden vascular wilting of green plants.\n"
+                "• **Drenching Solution**: Mix Copper Oxychloride 50 WP (3g/L) + Streptocycline (0.5g/10L water).\n"
+                "• **Exact Drenching Volume**: Apply **150–200 ml of prepared solution directly at the root zone per plant** using a nozzle-removed knapsack sprayer.\n"
+                "• **Fertigation**: Drip fertigate 19:19:19 (3kg/acre) 3 days after drenching to stimulate fresh root growth."
+            ), suffix
+
+        # 4. Leaf Curling & Micro-nutrient Deficiency
+        if any(kw in q for kw in ["leaf curl", "curling", "stunted", "micronutrient", "deficiency"]):
+            return (
+                "📋 **Micro-Nutrient Deficiency & Leaf Curl Virus Management**:\n"
+                "• **Overview**: Stunted growth and downward leaf curl indicate Zinc/Boron deficiency or Whitefly-transmitted virus.\n"
+                "• **Actionable Steps**: Foliar spray Micronutrient Mixture (Zinc + Boron + Iron @ 2.5g/L) every 14 days.\n"
+                "• **Cautions**: Spray Acetamiprid (0.5g/L) or Imidacloprid (0.5ml/L) to eliminate whitefly vectors."
+            ), suffix
+
+        # 5. Alkaline Soil pH 7.8, Fertigation & Zinc Sulphate — whole-word
+        # "ph" and dropped bare "schedule"/"dosage": as substrings they matched
+        # "phosphate" and any fertiliser-schedule question for any crop.
+        if any(kw in q for kw in ["alkaline", "zinc", "fertigation"]) or re.search(r"\bph\b", q):
+            return (
+                "📋 **Alkaline Soil (pH 7.8) Fertigation & Zinc Dosage**:\n"
+                "• **Overview**: Alkaline soils restrict natural Zinc and Iron uptake by crop roots.\n"
+                "• **Actionable Steps**: Apply Chelated Zinc (Zn-EDTA @ 1g/L) foliar spray or fertigate Zinc Sulphate (5kg/acre) with Elemental Sulphur.\n"
+                "• **Cautions**: Do not mix Zinc Sulphate directly with DAP/19-19-19 in the fertigation tank to prevent precipitation."
+            ), suffix
+
+        # 6. Fall Armyworm Resistance & Bt Bio-pesticides — "bt" as a raw
+        # substring matched "subtropical" and similar; require the bare token.
+        if any(kw in q for kw in ["bacillus", "resistance", "armyworm", "biopesticide", "bio-pesticide"]) or re.search(r"\bbt\b", q):
+            return (
+                "📋 **Fall Armyworm Resistance & Bt Bio-Pesticide Management**:\n"
+                "• **Overview**: Continuous chemical usage leads to pesticide resistance in Fall Armyworm (*Spodoptera frugiperda*).\n"
+                "• **Actionable Steps**: Alternate chemicals with *Bacillus thuringiensis* (Bt @ 2g/L) or *Metarhizium anisopliae* (5ml/L) poured into leaf whorls.\n"
+                "• **Cautions**: Rotate mode of action between Spinetoram, Emamectin Benzoate (0.4g/L), and biological agents."
+            ), suffix
+
+        # 7. Intercropping Maize & Groundnut
+        if any(kw in q for kw in ["intercrop", "intercropping", "groundnut", "erosion"]):
+            return (
+                "📋 **Maize & Groundnut Intercropping Management**:\n"
+                "• **Overview**: Intercropping Groundnut (legume) with Maize (cereal) prevents soil erosion and fixes atmospheric nitrogen.\n"
+                "• **Actionable Steps**: Maintain a 1:2 or 2:4 row pairing pattern (1 row Maize : 2 rows Groundnut).\n"
+                "• **Cautions**: Ensure adequate spacing (75cm between Maize rows) so Groundnut receives sufficient sunlight."
+            ), suffix
+
+        # 8. NPK Basal Ratio & FYM Application
+        if any(kw in q for kw in ["npk", "basal", "fym", "ratio", "cabbage", "red soil"]):
+            return (
+                "📋 **Balanced NPK Basal Dose & FYM Application**:\n"
+                "• **Overview**: Heavy feeding crops (Cabbage/Tomato) require rich organic matter and balanced NPK.\n"
+                "• **Actionable Steps**: Incorporate 10 tonnes Well-Decomposed Farmyard Manure (FYM)/acre during basal land preparation.\n"
+                "• **Cautions**: Apply 60kg N, 50kg P, and 50kg K per acre. Split Nitrogen into 3 equal doses at 0, 30, and 50 days."
+            ), suffix
+
+        # Default Crop-Specific Fallbacks
+        if c == "tomato":
+            return (
+                "📋 **Tomato Crop Health & Disease Management**:\n"
+                "• **Overview**: Fruit rot, Late Blight, and Blossom End Rot are major causes of tomato yield loss.\n"
+                "• **Actionable Steps**: Spray Cymoxanil + Mancozeb (2g/L) for blight. Apply Foliar Boron (1g/L) for fruit setting.\n"
+                "• **Cautions**: Ensure proper field drainage to prevent root rot in wet soils."
+            ), suffix
+
+        if c == "maize":
+            return (
+                "📋 **Maize Crop Nutrition & Pest Management**:\n"
+                "• **Overview**: Nitrogen management and Fall Armyworm protection ensure maximum cob weight.\n"
+                "• **Actionable Steps**: Apply DAP (50kg/acre) at sowing and Urea (35kg/acre) at 30 and 60 days.\n"
+                "• **Cautions**: Spray Emamectin Benzoate (0.4g/L) or Spinosad directly into leaf whorls for armyworm control."
+            ), suffix
+
+        if c == "onion":
+            return (
+                "📋 **Onion Crop Disease & Bulb Management**:\n"
+                "• **Overview**: Purple blotch and neck rot reduce bulb quality and storage shelf-life.\n"
+                "• **Actionable Steps**: Spray Saaf (Carbendazim + Mancozeb @ 2g/L) weekly. Spray 13:0:45 @ 5g/L for bulb size.\n"
+                "• **Cautions**: Stop irrigation 10-15 days prior to harvest to prevent bulb rot."
+            ), suffix
+
+        if c == "potato":
+            return (
+                "📋 **Potato Crop Management & Blight Control**:\n"
+                "• **Overview**: Late blight and nutrient deficiencies affect tuber count and size.\n"
+                "• **Actionable Steps**: Spray Metalaxyl + Mancozeb (2.5g/L) for blight. Apply SOP (0:0:50 @ 5g/L) for tuber size.\n"
+                "• **Cautions**: Perform earthing-up to prevent exposed green tubers."
+            ), suffix
+
+        if c == "cabbage":
+            return (
+                "📋 **Cabbage Crop Health & Diamondback Moth Control**:\n"
+                "• **Overview**: Diamondback moth (DBM) larvae and black rot reduce head formation and marketability.\n"
+                "• **Actionable Steps**: Apply FYM (10t/acre) + NPK (60:50:50). Spray Chlorantraniliprole (0.4ml/L) or Bt (2g/L) for DBM control.\n"
+                "• **Cautions**: Ensure 45x30cm plant spacing and avoid over-irrigation during head formation."
+            ), suffix
+
+        if c == "ragi":
+            return (
+                "📋 **Ragi (Finger Millet) Blast & Management**:\n"
+                "• **Overview**: Neck blast and finger blast damage grain fill during ears head stage.\n"
+                "• **Actionable Steps**: Spray Tricyclazole 75 WP (0.6g/L) or Carbendazim (1g/L) at earhead emergence.\n"
+                "• **Cautions**: Apply 100kg Complex (15:15:15) basal dose per acre."
+            ), suffix
+
+        if c == "brinjal":
+            return (
+                "📋 **Brinjal Fruit & Shoot Borer Management**:\n"
+                "• **Overview**: Shoot and fruit borer (*Leucinodes orbonalis*) causes wilted shoots and bored fruits.\n"
+                "• **Actionable Steps**: Clip wilted shoots weekly. Spray Emamectin Benzoate (0.4g/L) or Spinetoram (0.9ml/L).\n"
+                "• **Cautions**: Use pheromone traps (12/acre) for early monitoring."
+            ), suffix
+
+        if c == "marigold":
+            return (
+                "📋 **Marigold Flower Growth & Leaf Spot Management**:\n"
+                "• **Overview**: Alternaria leaf spot and bud borer degrade flower size and bloom quantity.\n"
+                "• **Actionable Steps**: Spray Mancozeb (2g/L) for leaf spot. Pinch apical terminal shoots at 30 days to encourage branching.\n"
+                "• **Cautions**: Apply 13:0:45 @ 5g/L foliar spray prior to flowering."
+            ), suffix
+
+        return (
+            "📋 **Crop Health & Agronomy Management Guide**:\n"
+            "• **Irrigation**: Maintain optimum soil moisture according to crop growth stage.\n"
+            "• **Nutrition**: Apply balanced NPK fertilizers and micronutrients based on soil testing.\n"
+            "• **Pest Control**: Monitor fields weekly and apply targeted bio-pesticides or recommended fungicides at early symptoms."
+        ), suffix
+
+
+async def embed_text(text: str) -> list[float] | None:
+    """
+    Generate embedding vector for a given text query using the active embeddings model.
+    """
+    if _embeddings is None:
+        return None
+    try:
+        return await _embeddings.aembed_query(text)
+    except Exception as e:
+        logger.error(f"Error embedding text: {e}")
+        return None
+
+
+_ADVISORY_CACHE: dict[str, str] = {}
+_MAX_ADVISORY_CACHE_SIZE = 2000
+
+def _set_advisory_cache(key: str, value: str) -> None:
+    if len(_ADVISORY_CACHE) >= _MAX_ADVISORY_CACHE_SIZE:
+        # Evict oldest entry (FIFO)
+        first_key = next(iter(_ADVISORY_CACHE))
+        _ADVISORY_CACHE.pop(first_key, None)
+    _ADVISORY_CACHE[key] = value
+
+async def get_agronomy_advice(query: str, db: AsyncSession, crop: str | None = None, phone_number: str | None = None, district: str | None = None) -> str:
+    """
+    Upgraded RAG pipeline for handling agronomy queries with multi-turn session memory context.
+    1. Detects query language (English/Kannada).
+    2. Embeds the user query and searches PostgreSQL using pgvector.
+    3. Retrieves recent conversation history if phone_number is provided.
+    4. Prompts Gemini 2.5 Flash with context and dialogue history.
+
+    Caching policy: answers are generated with per-user conversation history,
+    so the cache key is user-scoped AND personalized replies are never cached
+    (a history-conditioned answer must not be served to a later, different turn).
+    """
+    cache_key = f"{phone_number or 'anon'}:{district or 'Any'}:{crop or 'General'}:{query.strip().lower()}"
+    personalized = False
+
+    if _llm is None:
+        fallback_msg, suffix = get_offline_fallback(query, crop)
+        return f"{fallback_msg}\n\n— KisanMitra {suffix}"
+
+    try:
+        # Fetch conversation history for multi-turn context
+        history_str = "No prior history."
+        if phone_number:
+            from backend.services import context_service
+            recent_turns = await context_service.get_recent_history(phone_number, db, limit=4)
+            if recent_turns:
+                history_formatted = [f"{t['role'].upper()}: {t['content']}" for t in recent_turns]
+                history_str = "\n".join(history_formatted)
+                personalized = True
+
+        if not personalized and cache_key in _ADVISORY_CACHE:
+            logger.info("RAG: Returning cached advisory for key=%s", cache_key)
+            return _ADVISORY_CACHE[cache_key]
+
+        # Retrieve knowledge chunks: true pgvector cosine similarity when the
+        # query can be embedded, keyword-order fallback otherwise. Keeping the
+        # fallback preserves advisory quality when GEMINI_API_KEY / pgvector are absent.
+        chunks = []
+        try:
+            filters = []
+            if crop:
+                filters.append(KnowledgeChunk.crop.in_([crop, "All", "General"]))
+
+            query_vector = None
+            if _HAS_PGVECTOR and _embeddings is not None:
+                try:
+                    # Bound embedding latency so a slow API call can never stall
+                    # the whole advisory pipeline (LLM itself has its own 8s cap).
+                    query_vector = await asyncio.wait_for(embed_text(query), timeout=4.0)
+                except (asyncio.TimeoutError, Exception) as emb_err:
+                    logger.warning(f"RAG: Query embedding failed ({emb_err}); using keyword-order retrieval.")
+
+            if query_vector is not None:
+                # Ranked by cosine distance — served by the HNSW index
+                # ix_knowledge_embedding_hnsw (vector_cosine_ops).
+                stmt = (
+                    select(KnowledgeChunk.content)
+                    .where(KnowledgeChunk.embedding.isnot(None), *filters)
+                    .order_by(KnowledgeChunk.embedding.cosine_distance(query_vector))
+                    .limit(5)
+                )
+            else:
+                stmt = select(KnowledgeChunk.content).where(*filters).limit(5)
+
+            result = await db.execute(stmt)
+            chunks = result.scalars().all()
+        except Exception as db_err:
+            logger.warning(f"Context lookup error: {db_err}")
+
+        if not chunks:
+            context = "No specific local database context found. Supply standard agronomy best practices for Karnataka."
+        else:
+            context = "\n\n".join(chunks)
+
+        # 3. Generate structured response via LLM
+        prompt = ChatPromptTemplate.from_messages([
+            ("system", 
+             "You are an expert, empathetic agronomist for KisanMitra helping farmers in Karnataka.\n"
+             "Your goal is to provide highly precise, practical, and structured agronomic advice.\n\n"
+             "Strict Guidelines:\n"
+             "1. Respond in the language of the query. If the query is in English, reply in English. "
+             "   If the query is in Kannada or a mix of Kannada/English, reply in clean, simple Kannada.\n"
+             "2. Format your answer with clean headers and bullet points for scan-readability:\n"
+             "   • 📋 **ವಿಷಯದ ಅವಲೋಕನ (Overview)**: Brief diagnosis of the problem/topic.\n"
+             "   • 🛠️ **ಪರಿಹಾರ ಕ್ರಮಗಳು (Actionable Steps)**: Step-by-step guidance (fertilizer dosage, land prep, watering).\n"
+             "   • ⚠️ **ಮುನ್ನೆಚ್ಚರಿಕೆಗಳು (Cautions & Prevention)**: Prevention tips or chemical safety instructions.\n"
+             "3. Rely on the provided Context and Recent Conversation History to understand follow-up questions.\n"
+             "4. Do not invent any unverified figures or chemical recommendations."
+            ),
+            ("user", 
+             "Knowledge Base Context:\n{context}\n\nRecent Conversation History:\n{history}\n\nTarget Crop: {crop}\nQuestion: {query}\n\nResponse:"
+            )
+        ])
+        
+        chain = prompt | _llm | StrOutputParser()
+        
+        # Enforce strict 8.0s timeout boundary on LLM invocation for fast Telegram UX
+        answer = None
+        try:
+            answer = await asyncio.wait_for(
+                chain.ainvoke({
+                    "context": context,
+                    "history": history_str,
+                    "query": query, 
+                    "crop": crop or "General"
+                }),
+                timeout=8.0
+            )
+        except (asyncio.TimeoutError, Exception) as call_err:
+            logger.warning("LLM call timed out or failed (%s). Utilizing instant offline agronomy fallback.", call_err)
+            answer = None
+
+        if not answer:
+            fallback_msg, suffix = get_offline_fallback(query, crop)
+            final_res = f"{fallback_msg}\n\n— KisanMitra {suffix}"
+            if not personalized:
+                _set_advisory_cache(cache_key, final_res)
+            return final_res
+
+        clean_ans = answer.replace("— KisanMitra 🌾", "").replace("— ಕಿಸಾನ್‌ಮಿತ್ರ 🌾", "").strip()
+        final_res = f"{clean_ans}\n\n— KisanMitra 🌾"
+        if not personalized:
+            _set_advisory_cache(cache_key, final_res)
+        return final_res
+
+    except Exception as exc:
+        logger.error(f"RAG Error: {exc}")
+        fallback_msg, suffix = get_offline_fallback(query, crop)
+        return f"{fallback_msg}\n\n— KisanMitra {suffix}"

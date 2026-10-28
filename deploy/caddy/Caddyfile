@@ -1,0 +1,87 @@
+# KisanMitra Caddy reverse proxy configuration.
+#
+# Route map (Phase 2 verified):
+#   FastAPI routes are mounted WITHOUT an /api prefix (app.include_router(api_router)).
+#   Caddy uses `handle_path /api/*` which STRIPS the /api prefix before proxying.
+#   So a browser request to /api/health reaches FastAPI as GET /health ✓
+#   And /api/prices reaches FastAPI as GET /prices ✓
+#
+# n8n is intentionally NOT exposed publicly — use SSH tunnel: ssh -L 5678:127.0.0.1:5678 deploy@<host>
+{
+        email {$ACME_EMAIL}
+        servers {
+                protocols h1 h2 h3
+        }
+}
+
+{$DOMAIN} {
+        encode zstd gzip
+
+        # Security headers applied globally
+        header {
+                Strict-Transport-Security "max-age=31536000; includeSubDomains; preload"
+                X-Content-Type-Options nosniff
+                X-Frame-Options DENY
+                X-XSS-Protection "1; mode=block"
+                Referrer-Policy strict-origin-when-cross-origin
+                Permissions-Policy "camera=(), microphone=(), geolocation=()"
+                -Server
+        }
+
+        # Edge container health probe (no auth required)
+        handle /edge-health {
+                respond "ok" 200
+        }
+
+        # API: /api/* is proxied to FastAPI with the /api prefix STRIPPED.
+        # FastAPI serves routes at /, /health, /prices, /webhook, etc. (no /api prefix).
+        handle_path /api/* {
+                request_body {
+                        max_size 10MB
+                }
+                reverse_proxy api-a:8000 api-b:8000 {
+                        lb_policy least_conn
+                        lb_try_duration 5s
+                        lb_try_interval 250ms
+
+                        # Active health checks against the backend health endpoint
+                        health_uri {$API_HEALTH_PATH:/health}
+                        health_interval 3s
+                        health_timeout 2s
+                        health_status 2xx
+
+                        # Passive failure tracking
+                        fail_duration 10s
+                        max_fails 2
+                        unhealthy_status 5xx
+
+                        # Disable response buffering for SSE / streaming responses
+                        flush_interval -1
+
+                        transport http {
+                                dial_timeout 3s
+                                response_header_timeout 90s
+                                keepalive 30s
+                                keepalive_idle_conns 100
+                        }
+                }
+        }
+
+        # React PWA static file serving with SPA fallback.
+        # Hashed asset files (/assets/*) are immutable; app shell files must revalidate.
+        handle {
+                root * /srv
+
+                # Hashed chunks: browser can cache forever
+                @immutable path /assets/*
+                header @immutable Cache-Control "public, max-age=31536000, immutable"
+
+                # App shell, service worker, and manifest: must revalidate on every load
+                @revalidate path / /index.html /sw.js /registerSW.js /manifest.webmanifest /workbox-*.js
+                header @revalidate Cache-Control "no-cache"
+
+                # SPA fallback: any unknown path returns index.html so client-side routing works
+                try_files {path} /index.html
+                file_server
+        }
+}

@@ -1,0 +1,8 @@
+Model,MAPE (%),RMSE (Rs),MAE (Rs),R2 Score,CV Std (%),Time (s),Best Params
+SVR,10.32,287.58,192.41,0.8024,0.24,66.8,"{""model__kernel"": ""rbf"", ""model__epsilon"": 1, ""model__C"": 100}"
+Random Forest,10.49,276.98,193.53,0.8167,0.26,35.7,"{""n_estimators"": 200, ""min_samples_split"": 10, ""min_samples_leaf"": 2, ""max_features"": ""sqrt"", ""max_depth"": 20}"
+Gradient Boosting,10.71,282.29,198.13,0.8096,0.21,64.1,"{""n_estimators"": 200, ""max_depth"": 5, ""learning_rate"": 0.05}"
+KNN Regressor,10.96,291.74,202.77,0.7966,0.15,1.2,"{""model__weights"": ""distance"", ""model__n_neighbors"": 10}"
+Linear Regression,11.16,292.55,203.88,0.7955,0.0,0.0,{}
+Ridge Regression,11.16,292.54,203.87,0.7955,0.19,3.9,"{""model__alpha"": 0.1}"
+Decision Tree,11.5,303.59,211.93,0.7797,0.24,1.4,"{""min_samples_split"": 10, ""min_samples_leaf"": 5, ""max_depth"": 5}"

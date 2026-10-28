@@ -14,7 +14,7 @@ from pathlib import Path
 
 # ── Setup ─────────────────────────────────────────────────
 BASE_DIR = Path(__file__).parent.parent
-load_dotenv(BASE_DIR / "config" / ".env")
+load_dotenv(BASE_DIR / ".env")
 
 API_KEY  = os.getenv("DATA_GOV_API_KEY")
 RAW_DIR  = BASE_DIR / "data" / "raw"
@@ -33,6 +33,8 @@ def download_from_api():
     offset = 0
     limit  = 500
 
+    headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"}
+
     while True:
         url = (
             f"https://api.data.gov.in/resource/{RESOURCE_ID}"
@@ -40,11 +42,11 @@ def download_from_api():
             f"&format=json"
             f"&limit={limit}"
             f"&offset={offset}"
-            f"&filters[State]=Karnataka"
+            f"&filters[state]=Karnataka"
         )
 
         try:
-            response = requests.get(url, timeout=30)
+            response = requests.get(url, headers=headers, timeout=30)
 
             if response.status_code != 200:
                 print(f"API error: {response.status_code}")
@@ -89,38 +91,32 @@ def generate_sample_data():
     # Monthly averages for each crop and market
     price_patterns = {
         "Tomato": {
-            "Kolar": [
-                1800, 2200, 2800, 1200,
-                900, 1600, 2100, 2400,
-                2000, 1700, 2500, 2900
-            ],
-            "Chikkaballapur": [
-                1700, 2100, 2700, 1100,
-                850, 1500, 2000, 2300,
-                1900, 1600, 2400, 2800
-            ],
+            "Kolar": [1800, 2200, 2800, 1200, 900, 1600, 2100, 2400, 2000, 1700, 2500, 2900],
+            "Chikkaballapur": [1700, 2100, 2700, 1100, 850, 1500, 2000, 2300, 1900, 1600, 2400, 2800],
+            "Belagavi": [1500, 1900, 2400, 1300, 1000, 1400, 1900, 2100, 1800, 1500, 2200, 2500],
         },
         "Potato": {
-            "Kolar": [
-                1200, 1100, 1000, 1300,
-                1400, 1500, 1600, 1400,
-                1200, 1100, 1000, 900
-            ],
+            "Kolar": [1200, 1100, 1000, 1300, 1400, 1500, 1600, 1400, 1200, 1100, 1000, 900],
+            "Mysuru": [1100, 1050, 950, 1200, 1300, 1400, 1500, 1350, 1150, 1050, 950, 850],
         },
         "Onion": {
-            "Kolar": [
-                2000, 1800, 1600, 1400,
-                1200, 1000, 1200, 1600,
-                2000, 2400, 2800, 2200
-            ],
+            "Kolar": [2000, 1800, 1600, 1400, 1200, 1000, 1200, 1600, 2000, 2400, 2800, 2200],
+            "Dharwad": [1800, 1600, 1400, 1200, 1100, 900, 1100, 1500, 1900, 2200, 2600, 2000],
         },
         "Marigold": {
-            "Chikkaballapur": [
-                800, 900, 1200, 1800,
-                2400, 2000, 1600, 1200,
-                900, 800, 900, 1100
-            ],
+            "Chikkaballapur": [800, 900, 1200, 1800, 2400, 2000, 1600, 1200, 900, 800, 900, 1100],
         },
+        "Maize": {
+            "Davanagere": [2100, 2150, 2200, 2250, 2200, 2100, 2050, 2000, 1950, 1900, 1950, 2050],
+            "Haveri": [2050, 2100, 2150, 2200, 2150, 2050, 2000, 1950, 1900, 1850, 1900, 2000],
+        },
+        "Ragi": {
+            "Tumakuru": [2500, 2550, 2600, 2500, 2400, 2300, 2250, 2200, 2300, 2400, 2450, 2500],
+            "Mandya": [2450, 2500, 2550, 2450, 2350, 2250, 2200, 2150, 2250, 2350, 2400, 2450],
+        },
+        "Brinjal": {
+            "Belagavi": [1400, 1500, 1600, 1400, 1200, 1000, 1100, 1300, 1500, 1700, 1600, 1400],
+        }
     }
 
     records = []

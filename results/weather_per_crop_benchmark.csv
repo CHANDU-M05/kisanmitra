@@ -1,0 +1,25 @@
+Experiment,Commodity,Mean MAPE (%),Median MAPE (%),MAE (₹/q)
+D1: CatBoost + Spatial (Control),Brinjal,44.01,37.28,806.4
+D1: CatBoost + Spatial (Control),Maize,21.35,21.53,468.52
+D1: CatBoost + Spatial (Control),Onion,36.97,27.87,642.04
+D1: CatBoost + Spatial (Control),Potato,23.78,18.44,422.72
+D1: CatBoost + Spatial (Control),Ragi (Finger Millet),20.37,21.22,651.04
+D1: CatBoost + Spatial (Control),Tomato,48.8,40.0,996.86
+D3: CatBoost + Spatial + Weather,Brinjal,44.06,37.11,810.65
+D3: CatBoost + Spatial + Weather,Maize,20.13,20.86,443.55
+D3: CatBoost + Spatial + Weather,Onion,36.86,27.75,638.41
+D3: CatBoost + Spatial + Weather,Potato,23.38,18.06,418.48
+D3: CatBoost + Spatial + Weather,Ragi (Finger Millet),21.05,22.07,678.75
+D3: CatBoost + Spatial + Weather,Tomato,47.46,39.92,993.71
+D2: LightGBM + Spatial (Control),Brinjal,43.65,36.49,800.94
+D2: LightGBM + Spatial (Control),Maize,22.61,22.81,495.09
+D2: LightGBM + Spatial (Control),Onion,37.75,28.7,663.98
+D2: LightGBM + Spatial (Control),Potato,24.06,19.6,437.53
+D2: LightGBM + Spatial (Control),Ragi (Finger Millet),21.06,22.54,677.22
+D2: LightGBM + Spatial (Control),Tomato,51.92,40.05,1012.2
+D3: LightGBM + Spatial + Weather,Brinjal,43.89,36.0,795.26
+D3: LightGBM + Spatial + Weather,Maize,20.96,21.43,460.6
+D3: LightGBM + Spatial + Weather,Onion,37.05,28.12,657.55
+D3: LightGBM + Spatial + Weather,Potato,23.72,18.74,430.87
+D3: LightGBM + Spatial + Weather,Ragi (Finger Millet),21.85,22.45,707.98
+D3: LightGBM + Spatial + Weather,Tomato,50.19,40.5,1005.15
