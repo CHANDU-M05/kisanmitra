@@ -4,7 +4,7 @@ import { ResponsiveContainer, ComposedChart, Line, XAxis, YAxis, Tooltip, Cartes
 import { ShieldAlert, TrendingDown, Thermometer, HelpCircle, Layers, CheckCircle2, Info, FlaskConical } from 'lucide-react';
 
 import Card from '../components/ui/Card';
-import { API } from '../config';
+import { fetchJson, apiUrl } from '../api';
 import {
   buildChartData,
   deriveForecastView,
@@ -179,8 +179,7 @@ export default function TerminalView() {
   const isAdmin = localStorage.getItem('role') === 'admin' && localStorage.getItem('auth_token') !== null;
 
   useEffect(() => {
-    fetch(`${API}/prices/crops-markets`)
-      .then(res => res.json())
+    fetchJson(apiUrl('/prices/crops-markets'), { attempts: 2 })
       .then(data => {
         if (data.crops && data.crops.length > 0) {
           setCropsList(data.crops);
@@ -194,12 +193,16 @@ export default function TerminalView() {
 
   useEffect(() => {
     let cancelled = false;
+    // The cancelled flag previously had NO cleanup hook, so switching markets
+    // never cancelled the old chain: a slow response for the PREVIOUS
+    // selection could still setState and overwrite the current chart.
+    // Now unmount/selection-change aborts in-flight requests outright.
+    const ctrl = new AbortController();
     // Reset first: a stale or empty market must never keep showing the previous
     // selection's prediction while the new request is in flight.
     setForecastView({ ...deriveForecastView(null), state: 'loading' });
 
-    fetch(`${API}/prices/history/${selectedMarket}/${selectedCrop}`)
-      .then(res => res.json())
+    fetchJson(apiUrl(`/prices/history/${encodeURIComponent(selectedMarket)}/${encodeURIComponent(selectedCrop)}`), { signal: ctrl.signal })
       .then(history => {
         if (cancelled) return;
         if (!Array.isArray(history) || history.length === 0) {
@@ -213,17 +216,16 @@ export default function TerminalView() {
         setHistoricalData(history);
         // No current_price and no arrivals_tonnes in the URL: the backend
         // resolves the verified mandi price itself and refuses it if too old.
-        return fetch(`${API}/prices/predict?commodity=${encodeURIComponent(selectedCrop)}&market=${encodeURIComponent(selectedMarket)}`)
-          .then(res => res.json())
+        return fetchJson(apiUrl(`/prices/predict?commodity=${encodeURIComponent(selectedCrop)}&market=${encodeURIComponent(selectedMarket)}`), { signal: ctrl.signal })
           .then(pred => { if (!cancelled) setForecastView(deriveForecastView(pred)); });
       })
       .catch(err => {
+        if (cancelled) return;
         console.error("Error loading historical prices", err);
-        if (!cancelled) setForecastView(deriveForecastView(null));
+        setForecastView(deriveForecastView(null));
       });
 
-    fetch(`${API}/saturation/${selectedMarket}/${selectedCrop}`)
-      .then(res => res.json())
+    fetchJson(apiUrl(`/saturation/${encodeURIComponent(selectedMarket)}/${encodeURIComponent(selectedCrop)}`), { signal: ctrl.signal })
       .then(data => {
         // The backend already computed saturation against a documented reference
         // area. Dividing by a hardcoded 175 here produced a second, invented
@@ -236,9 +238,12 @@ export default function TerminalView() {
         });
       })
       .catch(err => {
+        if (cancelled) return;
         console.error("Error loading saturation metrics", err);
         setCapacity({ filled: null, total: null, percentage: null, basis: null });
       });
+
+    return () => { cancelled = true; ctrl.abort(); };
   }, [selectedCrop, selectedMarket]);
 
   useEffect(() => {

@@ -5,6 +5,7 @@ import { Search, Terminal, BarChart2, Users, Settings, MessageSquare, LogOut, Cl
 import { Toaster } from 'react-hot-toast';
 import { useTranslation } from 'react-i18next';
 import { API } from '../config';
+import { fetchJson, cachedGet, apiUrl } from '../api';
 import CropCalendarModal from './CropCalendarModal';
 
 export default function Layout() {
@@ -73,10 +74,10 @@ export default function Layout() {
   }, [darkMode]);
 
   useEffect(() => {
+    const ctrl = new AbortController();
     // 1. Fetch live ticker prices with explicit trend arrows & timestamp
     const fetchWatchlist = () => {
-      fetch(`${API}/prices/latest-watch`)
-        .then(res => res.json())
+      fetchJson(apiUrl('/prices/latest-watch'), { signal: ctrl.signal })
         .then(data => {
           if (Array.isArray(data) && data.length > 0) {
             const tickerStr = data
@@ -103,22 +104,26 @@ export default function Layout() {
             setLastRefreshed(new Date());
           }
         })
-        .catch(err => console.error("Error loading watchlist", err));
+        .catch(err => {
+          // A hung/sleeping backend must not leave the ticker claiming
+          // "LOADING…" forever — say what actually happened; the 60s
+          // interval retries and this clears on the next success.
+          console.error("Error loading watchlist", err);
+          setTickerString('MARKET DATA TEMPORARILY UNAVAILABLE — RETRYING EVERY 60s');
+        });
     };
 
     fetchWatchlist();
     const intervalId = setInterval(fetchWatchlist, 60000); // refresh every min
 
     // 2. Fetch Kolar Tomato Saturation & declarations total
-    fetch(`${API}/declarations/summary`)
-      .then(res => res.json())
+    cachedGet(apiUrl('/declarations/summary'), { signal: ctrl.signal })
       .then(data => {
         setTotalDeclarations(data.total_declarations || 0);
       })
       .catch(err => console.error("Error loading declarations summary", err));
 
-    fetch(`${API}/saturation/Kolar/Tomato`)
-      .then(res => res.json())
+    fetchJson(apiUrl('/saturation/Kolar/Tomato'), { signal: ctrl.signal })
       .then(data => {
         // Report the backend's own figure. This used to divide by a hardcoded
         // 175-acre "hub capacity" that no endpoint, model or bot recognises, so
@@ -132,7 +137,7 @@ export default function Layout() {
         setKolarSaturation('—');
       });
 
-    return () => clearInterval(intervalId);
+    return () => { clearInterval(intervalId); ctrl.abort(); };
   }, []);
 
   // Format freshness string e.g. "Updated: Just now" or "Updated: X mins ago"

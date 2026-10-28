@@ -4,7 +4,8 @@ import { Shield, Eye, AlertTriangle, MapPin } from 'lucide-react';
 import { MapContainer, TileLayer, Marker, Popup, Tooltip as LeafletTooltip, useMap } from 'react-leaflet';
 import L from 'leaflet';
 import 'leaflet/dist/leaflet.css';
-import { API, derive_current_season, get_season_options } from '../config';
+import { derive_current_season, get_season_options } from '../config';
+import { fetchJson, cachedGet, apiUrl } from '../api';
 
 export default function InsightsView() {
   const [season, setSeason] = useState(derive_current_season);
@@ -97,31 +98,15 @@ export default function InsightsView() {
   // on Render free tier the first request hits a ~40s cold start and can hang
   // or 502. Without a timeout the promise never settles and the spinner is
   // never cleared; the retry rides out the cold start instead of failing.
-  const fetchJson = async (url, attempts = 1, timeoutMs = 15000) => {
-    let lastErr;
-    for (let i = 0; i < attempts; i++) {
-      const ctrl = new AbortController();
-      const timer = setTimeout(() => ctrl.abort(), timeoutMs);
-      try {
-        const res = await fetch(url, { signal: ctrl.signal });
-        if (!res.ok) throw new Error(`HTTP ${res.status}`);
-        return await res.json();
-      } catch (err) {
-        lastErr = err;
-        if (i < attempts - 1) await new Promise(r => setTimeout(r, 4000));
-      } finally {
-        clearTimeout(timer);
-      }
-    }
-    throw lastErr;
-  };
-
+  // Shared implementation lives in src/api.js — the summary GET also goes
+  // through cachedGet so Layout/DeclareView mount loads reuse one request.
   useEffect(() => {
     let cancelled = false;
+    const ctrl = new AbortController();
     setLoading(true);
     setErrorNote('');
 
-    fetchJson(`${API}/declarations/summary`, 2)
+    cachedGet(apiUrl('/declarations/summary'), { attempts: 2, signal: ctrl.signal })
       .then(summary => {
         if (cancelled) return;
 
@@ -157,8 +142,8 @@ export default function InsightsView() {
         return Promise.all(
           queries.map(q =>
             fetchJson(
-              `${API}/saturation/${encodeURIComponent(q.district)}/${encodeURIComponent(q.crop)}?season=${encodeURIComponent(season)}`,
-              1
+              apiUrl(`/saturation/${encodeURIComponent(q.district)}/${encodeURIComponent(q.crop)}?season=${encodeURIComponent(season)}`),
+              { attempts: 1, signal: ctrl.signal }
             )
               .catch(err => {
                 console.error(`Error loading saturation for ${q.district}/${q.crop}`, err);
@@ -203,7 +188,7 @@ export default function InsightsView() {
         setLoading(false);
       });
 
-    return () => { cancelled = true; };
+    return () => { cancelled = true; ctrl.abort(); };
   }, [season]);
 
   const filteredRadar = interventionRadar.filter(item => 

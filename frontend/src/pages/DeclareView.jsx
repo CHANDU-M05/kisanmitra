@@ -3,7 +3,8 @@ import React, { useState, useEffect } from 'react';
 import { ClipboardCheck, ShieldAlert, Sparkles, Send, ArrowRight } from 'lucide-react';
 import { toast } from 'react-hot-toast';
 import { useTranslation } from 'react-i18next';
-import { API, derive_current_season, get_season_options } from '../config';
+import { derive_current_season, get_season_options } from '../config';
+import { cachedGet, postJson, apiUrl } from '../api';
 
 export default function DeclareView() {
   const [districts, setDistricts] = useState([]);
@@ -22,20 +23,23 @@ export default function DeclareView() {
   const [receipt, setReceipt] = useState(null);
   const { t } = useTranslation();
 
-  // Load lookup lists on mount
+  // Load lookup lists on mount — through the shared summary cache (Layout
+  // fetches the same payload) with timeout+retry, so a cold-start hang can
+  // never leave the selects empty longer than the timeout window.
   useEffect(() => {
-    fetch(`${API}/declarations/summary`)
-      .then(res => res.json())
+    const ctrl = new AbortController();
+    cachedGet(apiUrl('/declarations/summary'), { attempts: 2, signal: ctrl.signal })
       .then(data => {
         if (data.districts) setDistricts(data.districts);
         if (data.crops) setCrops(Object.keys(data.crops));
       })
       .catch(err => {
         console.error("Error loading registry summary dynamic options", err);
-        // Fallbacks if backend doesn't resolve
+        // Fallbacks keep the form fully usable if the backend is unavailable.
         setDistricts(["Kolar", "Belagavi", "Chikkaballapur", "Davanagere", "Tumakuru"]);
         setCrops(["Tomato", "Onion", "Potato", "Ragi", "Maize"]);
       });
+    return () => ctrl.abort();
   }, []);
 
   const handleChange = (e) => {
@@ -61,30 +65,26 @@ export default function DeclareView() {
 
     setLoading(true);
 
-    fetch(`${API}/farmer/declare`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        farmer_name: form.farmerName.trim(),
-        phone: form.phone.trim(),
-        village: form.village.trim(),
-        district: form.district,
-        crop: form.crop,
-        area_acres: acres,
-        season: form.season
-      })
-    })
-      .then(res => {
-        if (!res.ok) throw new Error("Could not process crop registry.");
-        return res.json();
-      })
-      .then(data => {
+    // Writes NEVER auto-retry (postJson is timeout-only): a duplicate
+    // declaration attempt must be a conscious user action, not a silent
+    // background resend. setLoading always settles in the finally below.
+    (async () => {
+      try {
+        const { ok, status, data } = await postJson(apiUrl('/farmer/declare'), {
+          farmer_name: form.farmerName.trim(),
+          phone: form.phone.trim(),
+          village: form.village.trim(),
+          district: form.district,
+          crop: form.crop,
+          area_acres: acres,
+          season: form.season
+        });
+        if (!ok) throw new Error(`Could not process crop registry. (HTTP ${status})`);
         setReceipt({
           id: data.declaration_id,
           reply: data.whatsapp_reply,
           saturation: data.saturation
         });
-        setLoading(false);
         setForm(prev => ({
           ...prev,
           farmerName: '',
@@ -93,12 +93,13 @@ export default function DeclareView() {
           areaAcres: ''
         }));
         toast.success('Crop declaration submitted successfully!');
-      })
-      .catch(err => {
+      } catch (err) {
         console.error("Post crop declaration failed", err);
-        toast.error("Error writing declaration data to PostgreSQL. Please try again.");
+        toast.error("Could not save the declaration — the server was unreachable or rejected it. Please try again.");
+      } finally {
         setLoading(false);
-      });
+      }
+    })();
   };
 
   return (

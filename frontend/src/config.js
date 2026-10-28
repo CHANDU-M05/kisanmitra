@@ -7,7 +7,10 @@
  * (e.g. https://api.kisanmitra.in) in the .env.production file or the CI
  * environment so the built PWA always reaches the real server.
  */
-export const API = import.meta.env.VITE_API_URL ?? "http://localhost:8000";
+// Optional chaining keeps this module importable from plain `node --test`
+// (api.js dependency), where import.meta.env does not exist; Vite replaces
+// import.meta.env with a real object at build time either way.
+export const API = import.meta.env?.VITE_API_URL ?? "http://localhost:8000";
 
 /**
  * derive_current_season()
