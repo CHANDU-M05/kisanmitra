@@ -12,6 +12,7 @@ export default function InsightsView() {
   const [interventionRadar, setInterventionRadar] = useState([]);
   const [loading, setLoading] = useState(true);
   const [filterQuery, setFilterQuery] = useState('');
+  const [errorNote, setErrorNote] = useState('');
 
   const isAdmin = localStorage.getItem('role') === 'admin' && localStorage.getItem('auth_token') !== null;
 
@@ -91,17 +92,45 @@ export default function InsightsView() {
     }
   };
 
+  // Robust JSON fetch: per-request timeout (AbortController) + bounded retry
+  // with backoff. This is the fix for the "stuck on Ingesting..." symptom:
+  // on Render free tier the first request hits a ~40s cold start and can hang
+  // or 502. Without a timeout the promise never settles and the spinner is
+  // never cleared; the retry rides out the cold start instead of failing.
+  const fetchJson = async (url, attempts = 1, timeoutMs = 15000) => {
+    let lastErr;
+    for (let i = 0; i < attempts; i++) {
+      const ctrl = new AbortController();
+      const timer = setTimeout(() => ctrl.abort(), timeoutMs);
+      try {
+        const res = await fetch(url, { signal: ctrl.signal });
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        return await res.json();
+      } catch (err) {
+        lastErr = err;
+        if (i < attempts - 1) await new Promise(r => setTimeout(r, 4000));
+      } finally {
+        clearTimeout(timer);
+      }
+    }
+    throw lastErr;
+  };
+
   useEffect(() => {
+    let cancelled = false;
     setLoading(true);
-    fetch(`${API}/declarations/summary`)
-      .then(res => res.json())
+    setErrorNote('');
+
+    fetchJson(`${API}/declarations/summary`, 2)
       .then(summary => {
-        if (summary.crops) {
+        if (cancelled) return;
+
+        if (summary && summary.crops) {
           const sortedCrops = Object.entries(summary.crops)
             .map(([name, count]) => ({ name: name.toUpperCase(), value: count }))
             .filter(c => c.value > 0)
             .sort((a, b) => b.value - a.value);
-          
+
           if (sortedCrops.length > 5) {
             const top5 = sortedCrops.slice(0, 5);
             const othersValue = sortedCrops.slice(5).reduce((sum, item) => sum + item.value, 0);
@@ -114,60 +143,67 @@ export default function InsightsView() {
           }
         }
 
-        const queries = summary.active_pairs && summary.active_pairs.length > 0 
-          ? summary.active_pairs 
-          : [
-              { district: 'Belagavi', crop: 'Maize' },
-              { district: 'Chikkaballapur', crop: 'Tomato' },
-              { district: 'Belagavi', crop: 'Groundnut' },
-              { district: 'Chikkaballapur', crop: 'Ragi' },
-              { district: 'Kolar', crop: 'Tomato' }
-            ];
+        const fallback = [
+          { district: 'Belagavi', crop: 'Maize' },
+          { district: 'Chikkaballapur', crop: 'Tomato' },
+          { district: 'Belagavi', crop: 'Groundnut' },
+          { district: 'Chikkaballapur', crop: 'Ragi' },
+          { district: 'Kolar', crop: 'Tomato' }
+        ];
+        const queries = (summary && Array.isArray(summary.active_pairs) && summary.active_pairs.length > 0)
+          ? summary.active_pairs
+          : fallback;
 
-        Promise.all(
-          queries.map(q => 
-            fetch(`${API}/saturation/${q.district}/${q.crop}?season=${encodeURIComponent(season)}`)
-              .then(res => res.json())
+        return Promise.all(
+          queries.map(q =>
+            fetchJson(
+              `${API}/saturation/${encodeURIComponent(q.district)}/${encodeURIComponent(q.crop)}?season=${encodeURIComponent(season)}`,
+              1
+            )
               .catch(err => {
                 console.error(`Error loading saturation for ${q.district}/${q.crop}`, err);
-                return { district: q.district, crop: q.crop, saturation_pct: 0.0, risk_level: 'LOW' };
+                return null; // one bad pair must not sink the whole map
+              })
+              .then(raw => {
+                const item = raw || {};
+                const sat = Number(item.saturation_pct ?? 0.0) || 0.0;
+                let status = item.risk_level;
+                let action = 'Maintain Base State';
+
+                // Active intervention modeling when saturation exceeds simulated 60% threshold
+                if (sat >= 60.0) { status = 'HIGH'; action = 'CEASE SUBSIDIZED CREDIT'; }
+                else if (sat >= 40.0) { status = 'MEDIUM'; action = 'Cap Fertilizer Loans'; }
+                else { status = 'LOW'; action = 'Maintain Base State'; }
+
+                // Coerce identity fields to strings so filteredRadar's
+                // .toLowerCase() can never throw on a malformed/missing row.
+                return {
+                  district: String(item.district ?? q.district ?? ''),
+                  crop: String(item.crop ?? q.crop ?? ''),
+                  saturation: sat,
+                  action: action,
+                  status: status || 'LOW'
+                };
               })
           )
-        ).then(results => {
-          const radar = results.map(item => {
-            const sat = item.saturation_pct || 0.0;
-            let status = item.risk_level;
-            let action = 'Maintain Base State';
-
-            // Active intervention modeling when saturation exceeds simulated 60% threshold
-            if (sat >= 60.0) {
-              status = 'HIGH';
-              action = 'CEASE SUBSIDIZED CREDIT';
-            } else if (sat >= 40.0) {
-              status = 'MEDIUM';
-              action = 'Cap Fertilizer Loans';
-            } else {
-              status = 'LOW';
-              action = 'Maintain Base State';
-            }
-
-            return {
-              district: item.district,
-              crop: item.crop,
-              saturation: sat,
-              action: action,
-              status: status
-            };
-          });
-          setInterventionRadar(radar);
-          setLoading(false);
-        });
-
+        );
+      })
+      .then(radar => {
+        if (cancelled) return;
+        if (Array.isArray(radar)) setInterventionRadar(radar);
+        setLoading(false);
       })
       .catch(err => {
         console.error("Error loading declarations summary", err);
+        if (cancelled) return;
+        // Critical: clear the spinner even on total backend failure and still
+        // render the map (tiles, no markers) behind a non-blocking notice.
+        setInterventionRadar([]);
+        setErrorNote('Could not reach the live backend \u2014 it may be waking up (free-tier cold start). Showing the map without data; retry in a few seconds.');
         setLoading(false);
       });
+
+    return () => { cancelled = true; };
   }, [season]);
 
   const filteredRadar = interventionRadar.filter(item => 
@@ -212,6 +248,13 @@ export default function InsightsView() {
           </div>
         </div>
       </div>
+
+      {errorNote && (
+        <div className="bg-amber-50 border border-amber-200 text-amber-800 dark:bg-amber-500/10 dark:border-amber-500/20 dark:text-amber-400 rounded-xl px-4 py-3 text-xs font-semibold flex items-center gap-2">
+          <AlertTriangle className="h-4 w-4 shrink-0" />
+          <span>{errorNote}</span>
+        </div>
+      )}
 
       {loading ? (
         <div className="h-64 bg-white border border-slate-200 rounded-2xl flex items-center justify-center text-xs font-bold text-slate-600 animate-pulse shadow-sm dark:bg-white/5 dark:border-white/10 dark:text-slate-450">
