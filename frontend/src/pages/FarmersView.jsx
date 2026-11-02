@@ -1,10 +1,12 @@
 // src/pages/FarmersView.jsx
 import React, { useState, useEffect } from 'react';
+import { useNavigate } from 'react-router-dom';
 import { Users, Filter, CheckCircle2, AlertCircle, RefreshCw, Download, ChevronDown, ChevronRight, Trash2 } from 'lucide-react';
 import { toast } from 'react-hot-toast';
 import Card from '../components/ui/Card';
 import { API } from '../config';
 import { identityLabel, isPlatformIdentity, identityKey } from '../identity';
+import { isUnauthorized, handleSessionExpired } from '../session';
 
 // Server-side audit logging for DPDP Act compliance
 function logAudit(action, target) {
@@ -44,6 +46,7 @@ function getStatusBadge(status) {
 }
 
 export default function FarmersView() {
+  const navigate = useNavigate();
   const [declarations, setDeclarations] = useState([]);
   const [filteredDeclarations, setFilteredDeclarations] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -108,8 +111,18 @@ export default function FarmersView() {
     setLoading(true);
     const token = localStorage.getItem('auth_token');
     fetch(`${API}/declarations?limit=150`, { headers: { 'Authorization': `Bearer ${token}` } })
-      .then(res => res.json())
+      .then(res => {
+        // An expired/invalid admin token must send the user back to login, not be
+        // swallowed as "response is not an array" and rendered as an empty table.
+        if (isUnauthorized(res.status)) {
+          handleSessionExpired({ storage: localStorage, navigate, notify: toast.error });
+          setLoading(false);
+          return null; // handled: skip normal parsing below
+        }
+        return res.json();
+      })
       .then(data => {
+        if (data === null) return; // session-expired path already handled
         if (!Array.isArray(data)) {
           console.error("Declarations response is not an array:", data);
           setLoading(false);
