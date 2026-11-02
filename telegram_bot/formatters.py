@@ -11,6 +11,7 @@ even if the farmer doesn't read English.
 from __future__ import annotations
 
 import logging
+import math
 
 logger = logging.getLogger("kisanmitra.telegram.formatters")
 
@@ -103,6 +104,25 @@ def format_anomaly(r: dict) -> str:
     icon   = "🚀" if a_type == "SPIKE" else "💥"
     direction = "📈" if r.get("forecast", 0) > r.get("current_price", 0) else "📉"
     msp_line  = f"\nMSP Floor: ₹{r['msp_floor']:,.0f}/q" if r.get("msp_floor") else ""
+    # The gate is crop-aware (max(30%, 1.5x the crop's benchmark MAPE)); show
+    # the threshold the backend actually applied instead of a hardcoded 30%.
+    # Payloads arrive from the wire: anything non-numeric or non-finite must
+    # degrade to the historical floor label, never crash or print `nan%`.
+    def _pct(value) -> float | None:
+        if isinstance(value, bool) or not isinstance(value, (int, float)):
+            return None
+        return value if math.isfinite(value) else None
+
+    threshold = _pct(r.get("anomaly_threshold_pct"))
+    mape = _pct(r.get("crop_mape_pct"))
+    deviation = _pct(r.get("deviation_pct"))
+    threshold_label = f"{threshold:.1f}%" if threshold is not None else "30%"
+    if mape is not None and threshold is not None and threshold > 30.0:
+        threshold_note = ("— beyond what the model's own error explains"
+                          f" (this crop's benchmark MAPE: {mape:.1f}%)")
+    else:
+        threshold_note = ""
+    deviation_str = f"{deviation:.1f}%" if deviation is not None else "n/a"
     return (
         f"*{r['crop']} — 60-Day Forecast* {direction}\n"
         f"District: {r['district']}\n"
@@ -112,9 +132,9 @@ def format_anomaly(r: dict) -> str:
         f"Signal: {r.get('signal', 'NEUTRAL')}\n"
         f"{r.get('signal_kannada', '')}\n"
         f"━━━━━━━━━━━━━━━━━━\n"
-        f"Model Reliability: {_reliability(r.get('crop_mape_pct'))}{msp_line}\n\n"
+        f"Model Reliability: {_reliability(mape)}{msp_line}\n\n"
         f"⚠️ *Anomaly Alert — {a_type}* {icon}\n"
-        f"Deviation: *{r['deviation_pct']:.1f}%* (threshold: 30%)\n"
+        f"Deviation: *{deviation_str}* (threshold: {threshold_label}){threshold_note}\n"
         f"This forecast shows a large price movement. "
         f"{_freshness_notes(r)}\n"
         f"_Human-in-the-Loop Validation Active — KisanMitra 🌾_"

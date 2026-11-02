@@ -91,6 +91,7 @@ def _predict_response(res: dict) -> dict:
             "is_anomaly":      res["is_anomaly"],
             "anomaly_type":    res["anomaly_type"],
             "deviation_pct":   res["deviation_pct"],
+            "anomaly_threshold_pct": res.get("anomaly_threshold_pct"),
         })
         return shape
 
@@ -104,6 +105,7 @@ def _predict_response(res: dict) -> dict:
         "is_anomaly":      False,
         "anomaly_type":    None,
         "deviation_pct":   None,
+        "anomaly_threshold_pct": res.get("anomaly_threshold_pct"),
     })
     if res["type"] == "stale_data":
         shape.update({

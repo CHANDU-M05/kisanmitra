@@ -60,6 +60,20 @@ function provenanceOf(pred) {
   };
 }
 
+const NO_ANOMALY = Object.freeze({ is_anomaly: false, deviation_pct: 0, anomaly_type: 'NORMAL', threshold_pct: null });
+
+function anomalyOf(pred) {
+  return {
+    is_anomaly: Boolean(pred.is_anomaly),
+    deviation_pct: pred.deviation_pct || 0,
+    anomaly_type: pred.anomaly_type || 'NORMAL',
+    // The gate is crop-aware (max(30%, 1.5x the crop's benchmark MAPE)); the
+    // server sends the threshold it applied so the banner never claims a
+    // number the backend didn't use.
+    threshold_pct: typeof pred.anomaly_threshold_pct === 'number' ? pred.anomaly_threshold_pct : null,
+  };
+}
+
 /**
  * Map a `/prices/predict` response onto what the screen may show.
  * Anything other than an explicit forecast/anomaly result yields hasForecast=false
@@ -71,7 +85,7 @@ export function deriveForecastView(pred) {
     return {
       state: FEED_STATE.ERROR, ...NO_FORECAST,
       cropMeta: { crop_mape_pct: null, msp_floor: null, msp_ratio: null },
-      anomaly: { is_anomaly: false, deviation_pct: 0, anomaly_type: 'NORMAL' },
+      anomaly: { ...NO_ANOMALY },
       recommendation: 'FORECAST SERVICE UNAVAILABLE',
       provenance: provenanceOf({}),
     };
@@ -100,11 +114,7 @@ export function deriveForecastView(pred) {
         msp_floor: pred.msp_floor ?? null,
         msp_ratio: pred.msp_ratio ?? null,
       },
-      anomaly: {
-        is_anomaly: Boolean(pred.is_anomaly),
-        deviation_pct: pred.deviation_pct || 0,
-        anomaly_type: pred.anomaly_type || 'NORMAL',
-      },
+      anomaly: anomalyOf(pred),
       provenance,
     };
   }
@@ -114,7 +124,7 @@ export function deriveForecastView(pred) {
     return {
       state: FEED_STATE.STALE, ...NO_FORECAST,
       cropMeta: { crop_mape_pct: null, msp_floor: null, msp_ratio: null },
-      anomaly: { is_anomaly: false, deviation_pct: 0, anomaly_type: 'NORMAL' },
+      anomaly: { ...NO_ANOMALY },
       recommendation: `NO FORECAST — LATEST RECORD IS ${age} (LIMIT ${pred.max_age_days ?? 3} DAYS)`,
       provenance,
     };
@@ -124,7 +134,7 @@ export function deriveForecastView(pred) {
     return {
       state: FEED_STATE.NO_DATA, ...NO_FORECAST,
       cropMeta: { crop_mape_pct: null, msp_floor: null, msp_ratio: null },
-      anomaly: { is_anomaly: false, deviation_pct: 0, anomaly_type: 'NORMAL' },
+      anomaly: { ...NO_ANOMALY },
       recommendation: 'NO VERIFIED MANDI RECORD FOR THIS MARKET',
       provenance,
     };
@@ -133,7 +143,7 @@ export function deriveForecastView(pred) {
   return {
     state: FEED_STATE.ERROR, ...NO_FORECAST,
     cropMeta: { crop_mape_pct: null, msp_floor: null, msp_ratio: null },
-    anomaly: { is_anomaly: false, deviation_pct: 0, anomaly_type: 'NORMAL' },
+    anomaly: { ...NO_ANOMALY },
     recommendation: 'FORECAST SERVICE UNAVAILABLE',
     provenance,
   };

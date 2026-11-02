@@ -14,6 +14,7 @@ Three integrity rules enforced here:
 """
 from __future__ import annotations
 
+import math
 from datetime import date, datetime
 
 from sqlalchemy import func, or_, select
@@ -306,7 +307,21 @@ async def _predict_tail(
     meta = ml_service.crop_prediction_meta(crop, current_price)
 
     deviation_pct = abs(pred - current_price) / max(current_price, 1) * 100
-    is_anomaly    = deviation_pct > 30.0
+    if not math.isfinite(deviation_pct):
+        # A corrupt spot price (Postgres Float columns accept NaN/±inf) would
+        # put an invalid literal into the JSON body and silently disable the
+        # anomaly comparison. Refuse as a domain error instead — same 503 path
+        # the sanity guard uses — rather than emit a plausible-looking payload.
+        return {
+            "type": "error",
+            "detail": f"Non-finite forecast deviation for {crop} at {market} — refusing to publish.",
+        }
+    # MAPE-aware gate: on volatile crops (Tomato/Marigold ~28-31% benchmark
+    # error) a fixed 30% flag would label the model's own noise a market
+    # SPIKE/CRASH. The effective threshold travels in the response so every
+    # channel discloses the same number instead of hardcoding "30%".
+    anomaly_threshold = ml_service.anomaly_threshold_pct(crop, meta["crop_mape_pct"])
+    is_anomaly    = deviation_pct > anomaly_threshold
     anomaly_type  = "SPIKE" if pred > current_price else ("CRASH" if pred < current_price else "NORMAL")
 
     base = {
@@ -327,6 +342,7 @@ async def _predict_tail(
         "is_anomaly":    is_anomaly,
         "anomaly_type":  anomaly_type,
         "deviation_pct": round(deviation_pct, 1),
+        "anomaly_threshold_pct": round(anomaly_threshold, 1),
         "crop_mape_pct": meta["crop_mape_pct"],
         "msp_floor":     meta["msp_floor"],
         "msp_ratio":     meta.get("msp_ratio"),

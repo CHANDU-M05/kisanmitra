@@ -50,10 +50,22 @@ test('a verified forecast renders numbers and a trend', () => {
 });
 
 test('an anomaly response is still a forecast', () => {
-  const view = deriveForecastView({ ...FORECAST, type: 'anomaly_flagged', is_anomaly: true, anomaly_type: 'CRASH', deviation_pct: 42 });
+  const view = deriveForecastView({ ...FORECAST, type: 'anomaly_flagged', is_anomaly: true, anomaly_type: 'CRASH', deviation_pct: 42, anomaly_threshold_pct: 41.8 });
   assert.equal(view.hasForecast, true);
   assert.equal(view.anomaly.is_anomaly, true);
   assert.equal(view.anomaly.anomaly_type, 'CRASH');
+  // The banner must quote the gate the server applied, not an invented one.
+  assert.equal(view.anomaly.threshold_pct, 41.8);
+});
+
+test('the anomaly threshold is never fabricated client-side', () => {
+  // Legacy payload without the field: null, so the UI omits the sentence
+  // instead of claiming a threshold the backend never sent.
+  const view = deriveForecastView({ ...FORECAST, type: 'anomaly_flagged', is_anomaly: true, anomaly_type: 'CRASH', deviation_pct: 42 });
+  assert.equal(view.anomaly.threshold_pct, null);
+  const stale = deriveForecastView({ type: 'stale_data', days_old: 53, price_as_of: '2026-08-25', max_age_days: 3, data_quality: [] });
+  assert.equal(stale.anomaly.threshold_pct, null);
+  assert.equal(stale.anomaly.is_anomaly, false);
 });
 
 test('a caller-supplied price is shown as a what-if scenario', () => {

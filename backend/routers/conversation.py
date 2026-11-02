@@ -74,7 +74,8 @@ async def conversation_message(
       "saturation"     — district crop saturation %
       "declaration"    — crop sown confirmation
       "advisory"       — RAG agronomy text
-      "anomaly_flagged"— high-deviation forecast (>30%) needing human review
+      "anomaly_flagged"— forecast deviation beyond the crop-aware anomaly gate
+                       (max(30%, 1.5x crop MAPE)) needing human review
       "help"           — unknown intent help message
       "error"          — model/data unavailable
     """

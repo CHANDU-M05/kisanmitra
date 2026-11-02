@@ -319,7 +319,8 @@ export default function TerminalView() {
           <div className="flex items-center gap-2.5 text-xs font-bold font-mono">
             <ShieldAlert className="w-4 h-4 text-amber-600 dark:text-amber-400 shrink-0" />
             <span>
-              ⚠️ ANOMALY ALERT ({selectedCrop}): {anomalyMeta.deviation_pct || Math.abs(envDeviation)}% Price Deviation Detected ({anomalyMeta.anomaly_type || 'SHIFT'}).
+              ⚠️ ANOMALY ALERT ({selectedCrop}): {anomalyMeta.deviation_pct || Math.abs(envDeviation)}% Price Deviation Detected ({anomalyMeta.anomaly_type || 'SHIFT'}).{' '}
+              {anomalyMeta.threshold_pct != null && `Exceeds the ${anomalyMeta.threshold_pct}% crop-aware gate — the model's own benchmark error for this crop.`}
             </span>
           </div>
           <span className="text-[9px] font-bold uppercase tracking-wider px-2 py-1 rounded bg-amber-500/20 text-amber-900 dark:text-amber-200 border border-amber-500/30">

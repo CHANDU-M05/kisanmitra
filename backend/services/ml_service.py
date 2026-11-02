@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import math
 from datetime import date, datetime, timedelta
 from pathlib import Path
 
@@ -432,6 +433,34 @@ def price_signal(pred: float, current: float, commodity: str | None = None) -> t
     if pct < -band:
         return "SELL NOW — Price likely falling", "ಈಗಲೇ ಮಾರಿ — ಬೆಲೆ ಇಳಿಯಲಿದೆ ⬇"
     return "NEUTRAL — Monitor weekly", "ಸ್ಥಿರ ಬೆಲೆ — ವಾರ ವಾರ ಗಮನಿಸಿ ➡"
+
+
+# ── Anomaly gate ─────────────────────────────────────────────────────────────
+ANOMALY_MIN_THRESHOLD_PCT = 30.0   # legacy fixed floor — never more permissive
+ANOMALY_MAPE_MULTIPLIER = 1.5      # deviation must clear 1.5x the crop's own MAPE
+
+
+def anomaly_threshold_pct(commodity: str | None, crop_mape: float | None = None) -> float:
+    """Deviation (in %) above which a forecast is labelled an anomaly.
+
+    A fixed 30% gate mislabels the model's own noise on volatile crops: Tomato
+    and Marigold carry benchmark MAPEs of ~28-31%, so any forecast movement of
+    ~30% is within the model's known error range, not evidence of a market
+    SPIKE/CRASH. The gate therefore scales with the crop's own error
+    (1.5x MAPE, floored at the historical 30%) so the flag means "beyond what
+    the model can explain" — and the effective threshold travels with the
+    response so every channel can disclose it. This reclassifies the label
+    only; it never suppresses the CI, the MAPE, or the estimate-not-guarantee
+    disclaimer.
+    """
+    mape = crop_mape if crop_mape is not None else CROP_MAPE.get((commodity or "").strip().title())
+    # A non-finite or non-numeric MAPE must not become a non-finite gate: that
+    # would silently switch anomaly detection off (any comparison with NaN is
+    # False) and leak an invalid NaN literal into the JSON response. Degrade to
+    # the historical 30% floor instead.
+    if not isinstance(mape, (int, float)) or isinstance(mape, bool) or not math.isfinite(mape) or mape <= 0:
+        return ANOMALY_MIN_THRESHOLD_PCT
+    return max(ANOMALY_MIN_THRESHOLD_PCT, mape * ANOMALY_MAPE_MULTIPLIER)
 
 
 def crop_prediction_meta(commodity: str, current_price: float) -> dict:
