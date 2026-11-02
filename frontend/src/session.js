@@ -29,6 +29,36 @@ export function isUnauthorized(status) {
   return status === 401;
 }
 
+// A valid, authenticated caller who lacks the right for one action (HTTP 403).
+// Distinct from 401 on purpose: their session is fine and must NOT be cleared.
+export const PERMISSION_DENIED_MESSAGE = 'You do not have permission to perform this action.';
+
+/**
+ * Route an authenticated mutation's HTTP response to the correct behaviour.
+ * Returns true when the failure was handled here and the caller should stop
+ * parsing the body, and false for a success (or any other status) the caller
+ * handles itself. `storage`, `navigate` and `notify` are injected so this is
+ * unit-testable with no DOM.
+ *
+ * - 401: expired/invalid token -> clear session + redirect (latched, so a burst
+ *   of concurrent mutations still produces one notice).
+ * - 403: authenticated but not permitted -> show a permission error and KEEP the
+ *   session (clearing it would wrongly log a valid admin out).
+ * - anything else: not our concern here (the caller decides).
+ */
+export function guardMutationResponse(res, { storage, navigate, notify } = {}) {
+  if (!res) return false;
+  if (isUnauthorized(res.status)) {
+    handleSessionExpired({ storage, navigate, notify });
+    return true;
+  }
+  if (res.status === 403) {
+    if (typeof notify === 'function') notify(PERMISSION_DENIED_MESSAGE);
+    return true;
+  }
+  return false;
+}
+
 /** Remove every session key from the given storage. Tolerates missing keys. */
 export function clearSession(storage) {
   if (!storage) return;

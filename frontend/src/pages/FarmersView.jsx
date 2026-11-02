@@ -6,7 +6,7 @@ import { toast } from 'react-hot-toast';
 import Card from '../components/ui/Card';
 import { API } from '../config';
 import { identityLabel, isPlatformIdentity, identityKey } from '../identity';
-import { isUnauthorized, handleSessionExpired } from '../session';
+import { isUnauthorized, handleSessionExpired, guardMutationResponse } from '../session';
 
 // Server-side audit logging for DPDP Act compliance
 function logAudit(action, target) {
@@ -70,10 +70,13 @@ export default function FarmersView() {
       headers: { 'Authorization': `Bearer ${token}` }
     })
       .then(res => {
+        // 401 -> clear expired session + redirect; 403 -> permission error, keep session.
+        if (guardMutationResponse(res, { storage: localStorage, navigate, notify: toast.error })) return null;
         if (!res.ok) throw new Error("Deletion failed");
         return res.json();
       })
       .then(data => {
+        if (data === null) return; // session/permission failure already handled
         if (data.success) {
           toast.success("Declaration deleted from database!");
           setDeclarations(prev => prev.filter(d => d.id !== id));
@@ -82,7 +85,7 @@ export default function FarmersView() {
       })
       .catch(err => {
         console.error("Error deleting declaration", err);
-        toast.error("Could not delete declaration from database.");
+        toast.error("Could not delete the declaration. Check your connection and try again.");
       });
   };
 
@@ -186,15 +189,24 @@ export default function FarmersView() {
       headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
       body: JSON.stringify({ status })
     })
-      .then(res => res.json())
+      .then(res => {
+        // Consistent session handling: expired token re-logs in; forbidden keeps session.
+        if (guardMutationResponse(res, { storage: localStorage, navigate, notify: toast.error })) return null;
+        if (!res.ok) throw new Error("Audit verification failed");
+        return res.json();
+      })
       .then(data => {
+        if (data === null) return; // session/permission failure already handled
         if (data.success) {
           setDeclarations(prev => prev.map(d =>
             d.id === id ? { ...d, satellite_status: status, trust_score: status === 'verified' ? 1.0 : 0.0 } : d
           ));
         }
       })
-      .catch(err => console.error("Error executing audit verification", err));
+      .catch(err => {
+        console.error("Error executing audit verification", err);
+        toast.error("Could not record the audit decision. Check your connection and try again.");
+      });
   };
 
   const handleExportCSV = () => {

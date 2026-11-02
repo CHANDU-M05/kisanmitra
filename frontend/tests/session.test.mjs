@@ -7,6 +7,8 @@ import {
   clearSession,
   handleSessionExpired,
   resetExpiryLatch,
+  guardMutationResponse,
+  PERMISSION_DENIED_MESSAGE,
   SESSION_STORAGE_KEYS,
   SESSION_EXPIRED_MESSAGE,
 } from '../src/session.js';
@@ -117,4 +119,80 @@ test('the latch recovers, so a later genuine expiry is shown again', () => {
   // past the cooldown window -> a fresh expiry is surfaced again
   handleSessionExpired({ storage: makeStorage(), notify, navigate: () => {}, now: () => 10_000 });
   assert.equal(notified, 2);
+});
+
+// ── guardMutationResponse: consistent 401/403 handling for admin mutations ────
+
+test('guardMutationResponse: 401 clears the session, notifies and returns true', () => {
+  resetExpiryLatch();
+  const storage = makeStorage({ auth_token: 'expired-jwt', role: 'admin', auth_status: 'true' });
+  let nav = null;
+  let notified = null;
+  const handled = guardMutationResponse(
+    { status: 401 },
+    { storage, navigate: (to, opts) => { nav = { to, opts }; }, notify: (m) => { notified = m; } },
+  );
+  assert.equal(handled, true);
+  assert.equal(storage.getItem('auth_token'), null);
+  assert.equal(notified, SESSION_EXPIRED_MESSAGE);
+  assert.equal(nav.to, '/login');
+  assert.equal(nav.opts.replace, true);
+});
+
+test('guardMutationResponse: 403 shows a permission error but KEEPS the session', () => {
+  resetExpiryLatch();
+  const storage = makeStorage({ auth_token: 'valid-jwt', role: 'admin', auth_status: 'true' });
+  let navigated = false;
+  let notified = null;
+  const handled = guardMutationResponse(
+    { status: 403 },
+    { storage, navigate: () => { navigated = true; }, notify: (m) => { notified = m; } },
+  );
+  assert.equal(handled, true);
+  assert.equal(notified, PERMISSION_DENIED_MESSAGE);
+  assert.equal(navigated, false);                       // forbidden must not redirect
+  assert.equal(storage.getItem('auth_token'), 'valid-jwt'); // and must not log out
+});
+
+test('guardMutationResponse: success status returns false and touches nothing', () => {
+  resetExpiryLatch();
+  const storage = makeStorage({ auth_token: 'valid-jwt', role: 'admin' });
+  let notified = 0;
+  for (const status of [200, 201, 204]) {
+    assert.equal(guardMutationResponse({ status }, { storage, navigate: () => {}, notify: () => { notified += 1; } }), false);
+  }
+  assert.equal(notified, 0);
+  assert.equal(storage.getItem('auth_token'), 'valid-jwt');
+});
+
+test('guardMutationResponse: generic server error returns false (caller handles) without clearing', () => {
+  resetExpiryLatch();
+  const storage = makeStorage({ auth_token: 'valid-jwt', role: 'admin' });
+  let notified = 0;
+  for (const status of [422, 500, 503]) {
+    assert.equal(guardMutationResponse({ status }, { storage, navigate: () => {}, notify: () => { notified += 1; } }), false);
+  }
+  assert.equal(notified, 0);
+  assert.equal(storage.getItem('auth_token'), 'valid-jwt');
+});
+
+test('guardMutationResponse: a missing response is safely not handled', () => {
+  assert.equal(guardMutationResponse(null), false);
+  assert.equal(guardMutationResponse(undefined, { storage: makeStorage() }), false);
+});
+
+test('a burst of concurrent 401 mutations still clears credentials but notifies once', () => {
+  resetExpiryLatch();
+  let notified = 0;
+  let redirected = 0;
+  // Two 401s in the same tick fall inside the cooldown window, so the notice and
+  // the redirect collapse to one — yet every stale token is still cleared.
+  const s1 = makeStorage({ auth_token: 'expired', role: 'admin' });
+  guardMutationResponse({ status: 401 }, { storage: s1, navigate: () => { redirected += 1; }, notify: () => { notified += 1; } });
+  const s2 = makeStorage({ auth_token: 'expired', role: 'admin' });
+  guardMutationResponse({ status: 401 }, { storage: s2, navigate: () => { redirected += 1; }, notify: () => { notified += 1; } });
+  assert.equal(notified, 1, 'second 401 within cooldown must not stack a notice');
+  assert.equal(redirected, 1);
+  assert.equal(s1.getItem('auth_token'), null);
+  assert.equal(s2.getItem('auth_token'), null);
 });
