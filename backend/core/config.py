@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+from urllib.parse import urlsplit
 
 from pydantic import AliasChoices, Field, SecretStr
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -113,7 +114,13 @@ class Settings(BaseSettings):
     # JWT signing key. Empty by design: falling back to any value that appears
     # in this repository would let anyone forge an admin token.
     secret_key: str = ""
-    cors_origins: str = "*"
+    # No default origins. An empty value is the single signal that the operator
+    # has not configured trust: development substitutes an explicit loopback
+    # allowlist (see resolve_cors_origins), production refuses to boot, and any
+    # other environment denies every cross-origin request. A hardcoded "*" here
+    # would pair a wildcard with allow_credentials and leak a permissive default
+    # into every unset deploy.
+    cors_origins: str = ""
 
     # ── Data freshness SLA ────────────────────────────────
     # AGMARKNET mandi records are published with an irregular lag. A spot price
@@ -227,6 +234,60 @@ def redact_secrets(message: str | None) -> str | None:
     return clean
 
 
+# ── CORS origin parsing / validation ──────────────────────
+# Shared by settings validation (startup) and middleware construction (runtime)
+# so the two can never disagree about which origins are trusted.
+DEV_DEFAULT_CORS_ORIGINS = ["http://localhost:3000", "http://127.0.0.1:3000"]
+
+
+def parse_cors_origins(raw: str | None) -> list[str]:
+    """Split a comma-separated CORS config into trimmed, non-empty entries.
+
+    Empty strings and stray whitespace between commas are dropped so " , , "
+    is treated the same as unset rather than becoming a blank allow-origin.
+    """
+    return [o.strip() for o in (raw or "").split(",") if o.strip()]
+
+
+def is_valid_https_origin(origin: str) -> bool:
+    """A production origin must be a bare ``https://host[:port]``.
+
+    Rejects the wildcard, insecure ``http://``, a missing host, embedded
+    credentials, and anything carrying a path/query/fragment (an origin has
+    none; a single trailing slash is tolerated). Deliberately strict so a
+    misconfiguration fails closed at startup instead of silently trusting a
+    weaker origin at runtime.
+    """
+    if not origin or origin == "*":
+        return False
+    try:
+        parsed = urlsplit(origin)
+    except ValueError:
+        return False
+    if parsed.scheme != "https" or "@" in parsed.netloc or not parsed.hostname:
+        return False
+    return (parsed.path in ("", "/")
+            and not parsed.query and not parsed.fragment)
+
+
+def resolve_cors_origins(app_env: str, raw_cors_origins: str | None) -> list[str]:
+    """Turn the CORS config into the exact list the middleware should allow.
+
+    There is no wildcard fallback anywhere: '*' is dropped from every
+    environment so credentials are never paired with it. When nothing valid is
+    configured, ONLY development substitutes the explicit loopback allowlist;
+    every other environment returns an empty list, which denies all cross-origin
+    requests (same-origin /api traffic is unaffected). Production validity is
+    enforced separately by validate_production_settings, which raises before
+    this is ever reached on a bad config.
+    """
+    env = (app_env or "").strip().lower()
+    origins = [o for o in parse_cors_origins(raw_cors_origins) if o != "*"]
+    if not origins and env == "development":
+        return list(DEV_DEFAULT_CORS_ORIGINS)
+    return origins
+
+
 def validate_production_settings(config: Settings) -> None:
     """Fail closed when production is configured with missing or known-unsafe secrets."""
     if config.app_env.lower() != "production":
@@ -258,8 +319,11 @@ def validate_production_settings(config: Settings) -> None:
          "WHATSAPP_VERIFY_TOKEN must be changed from the example default."),
         (not whatsapp_configured or bool(config.whatsapp_app_secret),
          "WHATSAPP_APP_SECRET must be set to enforce webhook signature verification."),
-        ("*" not in [origin.strip() for origin in config.cors_origins.split(",")],
-         "CORS_ORIGINS must list explicit trusted origins; wildcard is unsafe in production."),
+        (bool(_prod_origins := parse_cors_origins(config.cors_origins))
+         and all(is_valid_https_origin(o) for o in _prod_origins),
+         ("CORS_ORIGINS must list at least one explicit, valid HTTPS origin in "
+          "production; empty, whitespace-only, wildcard, insecure HTTP and "
+          "malformed origins are all rejected.")),
         # A leaked credential is unsafe whether or not the refresh job runs:
         # the value is already burned, and REFRESH_ENABLED can be turned on
         # later without the operator noticing the key was never rotated. This

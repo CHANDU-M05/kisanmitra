@@ -84,15 +84,23 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
-from backend.core.config import settings
+from backend.core.config import resolve_cors_origins, settings
 
-origins = [o.strip() for o in settings.cors_origins.split(",") if o.strip()]
-if settings.app_env == "production" and "*" in origins:
-    logger.warning("⚠️ CORS allow_origins is wildcard '*' in production! Consider restricting ALLOWED_ORIGINS.")
+# Origins come from a single resolver shared with validate_production_settings,
+# so the middleware can never trust an origin the startup check would reject.
+# There is deliberately no wildcard fallback: resolve_cors_origins drops '*'
+# (credentials are never paired with a wildcard) and, when nothing valid is
+# configured, only development substitutes the loopback allowlist — any other
+# environment resolves to an empty list, denying every cross-origin request
+# while leaving same-origin /api traffic untouched.
+allow_origins = resolve_cors_origins(settings.app_env, settings.cors_origins)
+if not allow_origins and settings.app_env.lower() != "development":
+    logger.warning("CORS_ORIGINS is unset for app_env=%s — all cross-origin "
+                   "requests are denied (fail closed).", settings.app_env)
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=origins if origins else ["*"],
+    allow_origins=allow_origins,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
