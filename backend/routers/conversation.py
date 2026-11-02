@@ -41,11 +41,21 @@ logger = logging.getLogger("kisanmitra.conversation")
 
 router = APIRouter(prefix="/api/v1/conversation", tags=["conversation"])
 
+from backend.core.request_guard import (
+    MAX_MESSAGE_TEXT_CHARS,
+    require_non_empty_text,
+)
+
 
 # ── Request / Response shapes ─────────────────────────────
 
 class ConversationRequest(BaseModel):
     sender_id: str          # phone number for WhatsApp, Telegram user_id as str for Telegram
+                            # Bounded at the edge (SENDER_ID_MAX_LENGTH) rather than by a
+                            # Pydantic max_length: a 400 names the field for the channel
+                            # layer, while a schema error would 422 for what is really a
+                            # policy limit of the String(20) identity column. No schema
+                            # migration in A1 — the DB column stays the ground truth.
     text: str               # raw user message
     channel: str = "web"   # "whatsapp" | "telegram" | "web"
     farmer_name: Optional[str] = None # Optional actual display name from Telegram/WhatsApp profile
@@ -60,6 +70,12 @@ class ConversationRequest(BaseModel):
 
 
 # ── Handler ───────────────────────────────────────────────
+
+# ChatHistory.phone_number is String(20) NOT NULL; the identity columns match.
+# A longer id is refused at the edge with a naming 400, never discovered at
+# commit time (see backend/core/request_guard.bounded_sender_id).
+SENDER_ID_MAX_LENGTH = 20
+
 
 @router.post("/message")
 async def conversation_message(
@@ -79,6 +95,15 @@ async def conversation_message(
       "help"           — unknown intent help message
       "error"          — model/data unavailable
     """
+    # 400 layer of the request_guard ladder (413 → 429 → 422 → 400). Runs
+    # BEFORE any context query, ChatHistory add, or intent execution.
+    from backend.core.request_guard import (
+        bounded_sender_id, require_message_intent, require_message_text,
+    )
+    bounded_sender_id(body.sender_id, SENDER_ID_MAX_LENGTH)
+    require_message_text(body)
+    require_message_intent(body)
+
     # If the caller pre-resolved entities (button flows), synthesise a text for NLP
     # so ChatHistory is always human-readable.
     synthetic_text = body.text
@@ -145,15 +170,23 @@ async def conversation_message(
             )
 
     # ── Log incoming ─────────────────────────────────────
-    db.add(ChatHistory(
-        phone_number=body.sender_id,
-        channel=body.channel,
-        role="user",
-        message_content=body.text or synthetic_text,
-        intent_category=parsed.intent.name,
-        crop=crop,
-        district=district,
-    ))
+    # ChatHistory writes are BEST-EFFORT telemetry: a persistence failure is
+    # logged and rolled back, never converted into a 500 that withholds the
+    # farmer's advice.
+    try:
+        db.add(ChatHistory(
+            phone_number=body.sender_id,
+            channel=body.channel,
+            role="user",
+            message_content=body.text or synthetic_text,
+            intent_category=parsed.intent.name,
+            crop=crop,
+            district=district,
+        ))
+        await db.flush()
+    except Exception as log_ex:
+        logger.error("ChatHistory user-turn logging failed (advice unaffected): %s", log_ex)
+        await db.rollback()
 
     result: dict = {}
 
@@ -195,7 +228,11 @@ async def conversation_message(
             result = await _handle_saturation(crop, district, db, raw_text=body.text)
 
         elif parsed.intent == Intent.AGRONOMY_ADVICE:
-            advice = await get_agronomy_advice(body.text, db, crop=crop, phone_number=body.sender_id, district=district)
+            # Retrieval runs on the raw message; button flows that synthesised
+            # text already passed require_message_text above with that text.
+            query_text = require_non_empty_text(body.text or synthetic_text,
+                                                "text", MAX_MESSAGE_TEXT_CHARS)
+            advice = await get_agronomy_advice(query_text, db, crop=crop, phone_number=body.sender_id, district=district)
             result = {"type": "advisory", "text": advice, "crop": crop}
 
         else:
@@ -211,16 +248,22 @@ async def conversation_message(
         result["is_fallback_default"] = True
 
     # ── Log outgoing ─────────────────────────────────────
-    db.add(ChatHistory(
-        phone_number=body.sender_id,
-        channel=body.channel,
-        role="assistant",
-        message_content=str(result),
-        intent_category=parsed.intent.name,
-        crop=crop,
-        district=district,
-    ))
-    await db.commit()
+    try:
+        db.add(ChatHistory(
+            phone_number=body.sender_id,
+            channel=body.channel,
+            role="assistant",
+            message_content=str(result),
+            intent_category=parsed.intent.name,
+            crop=crop,
+            district=district,
+        ))
+        await db.commit()
+    except Exception as log_ex:
+        # The answer is already in `result`; losing telemetry must not undo it.
+        logger.error("ChatHistory assistant-turn logging/commit failed (response "
+                     "delivered unchanged): %s", log_ex)
+        await db.rollback()
 
     return result
 

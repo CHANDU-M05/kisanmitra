@@ -71,6 +71,16 @@ def test_safe_production_configuration_passes():
     validate_production_settings(_production_settings())
 
 
+def test_proxy_header_trust_is_development_only():
+    """The default stays off, and only non-production may carry an override on."""
+    assert Settings(_env_file=None).trust_proxy_headers is False
+    # development/testing may experiment; production cannot boot with it on.
+    validate_production_settings(Settings(_env_file=None, app_env="development",
+                                          trust_proxy_headers=True))
+    with pytest.raises(RuntimeError, match="TRUST_PROXY_HEADERS"):
+        validate_production_settings(_production_settings(trust_proxy_headers=True))
+
+
 @pytest.mark.parametrize("overrides", [
     {"secret_key": LEAK_UNDER_TEST["secret_key"]},
     {"secret_key": ""},
@@ -81,6 +91,9 @@ def test_safe_production_configuration_passes():
     {"whatsapp_verify_token": ""},
     {"whatsapp_app_secret": ""},
     {"cors_origins": "*"},
+    # Rate-limit buckets must never key on an unverified X-Forwarded-For in
+    # production; a local override leaking into the Render env must not boot.
+    {"trust_proxy_headers": True},
     {"data_gov_api_key": ""},                      # refresh enabled, no key
     {"data_gov_api_key": LEAK_UNDER_TEST["data_gov_api_key"]},
 ])

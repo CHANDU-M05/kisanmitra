@@ -121,6 +121,16 @@ class Settings(BaseSettings):
     # would pair a wildcard with allow_credentials and leak a permissive default
     # into every unset deploy.
     cors_origins: str = ""
+    # Trust X-Forwarded-For when deriving rate-limit bucket keys. FALSE AND
+    # REQUIRED-FALSE IN PRODUCTION: no deployment stage has verified that every
+    # request passes a proxy that overwrites the header, so trusting it would
+    # let callers pick their own throttle bucket (spoofing) or collapse all
+    # proxy users into one (collateral throttling). Until a verified proxy
+    # strategy exists, unidentified clients share one fallback bucket per
+    # process — best-effort abuse control, deliberately not per-user fairness
+    # (see backend/core/rate_limit.py). Enabling is a development/testing
+    # affordance only.
+    trust_proxy_headers: bool = False
 
     # ── Data freshness SLA ────────────────────────────────
     # AGMARKNET mandi records are published with an irregular lag. A spot price
@@ -324,6 +334,15 @@ def validate_production_settings(config: Settings) -> None:
          ("CORS_ORIGINS must list at least one explicit, valid HTTPS origin in "
           "production; empty, whitespace-only, wildcard, insecure HTTP and "
           "malformed origins are all rejected.")),
+        # An unverified X-Forwarded-For is a caller-controlled identity: a
+        # production bucket keyed on it can be spoofed per request, and one
+        # shared proxy address silently throttles every user behind it. Only a
+        # verified proxy strategy (a later deployment stage) may change that —
+        # never a local override leaking into the Render environment.
+        (not config.trust_proxy_headers,
+         "TRUST_PROXY_HEADERS must remain false in production: no verified "
+         "proxy overwrite of X-Forwarded-For exists for this deployment, so "
+         "rate-limit buckets must not key on a caller-supplied header."),
         # A leaked credential is unsafe whether or not the refresh job runs:
         # the value is already burned, and REFRESH_ENABLED can be turned on
         # later without the operator noticing the key was never rotated. This

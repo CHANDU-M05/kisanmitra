@@ -85,6 +85,7 @@ app = FastAPI(
 )
 
 from backend.core.config import resolve_cors_origins, settings
+from backend.core.request_guard import install_request_guard
 
 # Origins come from a single resolver shared with validate_production_settings,
 # so the middleware can never trust an origin the startup check would reject.
@@ -105,6 +106,17 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+# Body-size cap + abuse-control throttle, installed as the OUTERMOST user
+# middleware (registered after CORS, which Starlette makes the outermost).
+# A guarded request is size- and rate-checked before anything downstream reads
+# or parses it — see request_guard.py for the admission order. The limiter has
+# no verified client identity in this deployment (no proxy overwriting
+# X-Forwarded-For has been verified), so unidentified callers share ONE
+# per-process fallback bucket: a best-effort abuse brake that can throttle
+# legitimate users together, NOT per-user fairness. A verified proxy strategy
+# replaces the fallback later without touching handlers.
+install_request_guard(app, trust_proxy_headers=settings.trust_proxy_headers)
 
 app.include_router(api_router)
 

@@ -248,14 +248,19 @@ async def get_advisory(
     req: dict,
     db: AsyncSession = Depends(get_db),
 ) -> dict:
-    query = req.get("query", "")
+    # 400 layer of the request_guard ladder (413 → 429 → 422 → 400): bounded,
+    # non-empty query text, counted in characters, before any RAG work.
+    from backend.core.request_guard import require_advisory_query
+    query = require_advisory_query(req)
     crop = req.get("crop", None)
-    if not query:
-        raise HTTPException(400, "Query cannot be empty.")
     from backend.services.rag import get_agronomy_advice
     response = await get_agronomy_advice(query, db, crop)
 
-    # Persist web query and response to ChatHistory for RAG telemetry
+    # Persist web query and response to ChatHistory for RAG telemetry. This is
+    # BEST-EFFORT: a persistence failure must never turn delivered advice into
+    # a 500 (the farmer already has the answer in `response`), but it must not
+    # pass silently either — the failure is logged, and the 400-layer
+    # sender-id/length guards upstream keep the obvious rejections out.
     user_log = ChatHistory(
         phone_number="WebFarmer",
         role="user",
@@ -268,16 +273,19 @@ async def get_advisory(
         message_content=response,
         intent_category="AGRONOMY_ADVICE"
     )
-    db.add(user_log)
-    db.add(assistant_log)
+    telemetry_id = None
     try:
+        db.add(user_log)
+        db.add(assistant_log)
+        await db.flush()
+        telemetry_id = str(assistant_log.id)
         await db.commit()
-        await db.refresh(assistant_log)
     except Exception as commit_ex:
-        logger.error(f"DB COMMIT FAILED in get_advisory: {commit_ex}")
+        logger.error("ChatHistory telemetry failed in get_advisory (advice "
+                     "unaffected): %s", commit_ex)
         await db.rollback()
 
-    return {"response": response, "id": str(assistant_log.id)}
+    return {"response": response, "id": telemetry_id}
 
 
 @router.post("/farmer/advisory/feedback")
