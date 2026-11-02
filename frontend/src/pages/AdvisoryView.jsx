@@ -288,7 +288,7 @@ export default function AdvisoryView() {
             {loading ? (
               <div className="h-full flex flex-col items-center justify-center space-y-3 text-slate-600">
                 <div className="h-7 w-7 border-2 border-emerald-500 border-t-transparent rounded-full animate-spin"></div>
-                <span className="text-xs font-bold animate-pulse uppercase tracking-wider font-mono">Analyzing context files via Gemini...</span>
+                <span className="text-xs font-bold animate-pulse uppercase tracking-wider font-mono">Consulting the agronomy knowledge base…</span>
               </div>
             ) : response ? (
               <div className="space-y-4">

@@ -196,6 +196,12 @@ export default function InsightsView() {
     item.crop.toLowerCase().includes(filterQuery.toLowerCase())
   );
 
+  // Crop-allocation is derived straight from the live /declarations/summary crop
+  // counts (top 5 + OTHERS). Bar length is relative to the largest crop; the
+  // percentage is that crop's share of the allocated total — no invented values.
+  const maxAllocation = allocationData.reduce((m, a) => Math.max(m, a.value), 0) || 1;
+  const totalAllocated = allocationData.reduce((s, a) => s + a.value, 0);
+
   return (
     <div className="space-y-6">
       {/* Top filter bar */}
@@ -246,6 +252,36 @@ export default function InsightsView() {
           Ingesting Real-time Database Metrics...
         </div>
       ) : (
+        <>
+          {allocationData.length > 0 && (
+            <div className="bg-white border border-slate-200 rounded-2xl p-5 shadow-sm dark:bg-white/5 dark:backdrop-blur-xl dark:border-white/10">
+              <h3 className="text-xs font-bold uppercase tracking-wider text-slate-800 dark:text-white flex flex-wrap items-center gap-x-2 gap-y-1 border-b border-slate-100 dark:border-white/5 pb-3 mb-4">
+                <Shield className="h-4 w-4 text-emerald-500" /> Crop Allocation
+                <span className="text-[9px] font-semibold normal-case tracking-normal text-slate-500 dark:text-slate-400">
+                  live sowing declarations by count · {totalAllocated} records · all seasons
+                </span>
+              </h3>
+              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-x-6 gap-y-3">
+                {allocationData.map((crop) => (
+                  <div key={crop.name} className="space-y-1">
+                    <div className="flex items-center justify-between text-[10px] font-bold uppercase tracking-wider text-slate-600 dark:text-slate-400">
+                      <span>{crop.name}</span>
+                      <span className="font-mono text-slate-800 dark:text-slate-200">
+                        {crop.value} · {Math.round((crop.value / totalAllocated) * 100)}%
+                      </span>
+                    </div>
+                    <div className="h-2 w-full bg-slate-100 rounded-full overflow-hidden dark:bg-white/5">
+                      <div
+                        className="h-full bg-emerald-500 rounded-full"
+                        style={{ width: `${(crop.value / maxAllocation) * 100}%` }}
+                      ></div>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
         /* Main Split Grid */
         <div className="grid grid-cols-1 lg:grid-cols-10 gap-6">
           
@@ -476,6 +512,7 @@ export default function InsightsView() {
           </div>
 
         </div>
+        </>
       )}
     </div>
   );

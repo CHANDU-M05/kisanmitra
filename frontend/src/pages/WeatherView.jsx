@@ -124,6 +124,12 @@ export default function WeatherView() {
 
   return (
     <div className="space-y-6">
+      {/* Data-provenance banner: this screen is an illustrative scenario model, not a live feed. */}
+      <div className="bg-amber-50 border border-amber-300 text-amber-900 dark:bg-amber-500/10 dark:border-amber-500/30 dark:text-amber-300 rounded-xl px-4 py-3 text-xs font-bold uppercase tracking-wider flex items-center gap-2">
+        <ShieldAlert className="h-4 w-4 shrink-0" />
+        <span>SIMULATED DATA — ILLUSTRATIVE ONLY — NOT A LIVE WEATHER FORECAST</span>
+      </div>
+
       {/* Top Banner Control deck */}
       <Card className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
         <div className="space-y-1">
@@ -131,7 +137,7 @@ export default function WeatherView() {
             <CloudRain className="h-4 w-4 text-emerald-500" /> Climate &amp; Sowing Window Forecast
           </h2>
           <p className="text-xs text-slate-600">
-            Localized meteorological monitoring paired with real-time agronomic crop advice.
+            Illustrative agronomic scenario modelled from representative seasonal parameters — not a live meteorological feed.
           </p>
         </div>
 
