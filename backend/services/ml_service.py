@@ -33,6 +33,13 @@ METADATA: dict = {}
 MODEL_STATUS: str = "unloaded"
 MODEL_STATUS_DETAIL: str = "model load has not started"
 
+# Provenance of the artifact actually loaded into memory and whether the shipped
+# metadata describes it. Surfaced on /health so a metadata/model drift — e.g.
+# CatBoost metrics published alongside a RandomForest artifact — is visible to an
+# operator instead of silently driving the accuracy the frontend displays.
+SERVED_MODEL_PROVENANCE: dict = {}
+MODEL_METADATA_MATCHES: bool | None = None
+
 _MODEL_FILES = ("price_model.pkl", "encoders.pkl", "model_metadata.json")
 
 
@@ -157,6 +164,7 @@ _PRICE_PATTERNS: dict[str, dict[str, list[int]]] = {
 def load_model() -> None:
     global MODEL, ENCODERS, FEATURES, METADATA, CROP_MAPE, MSP_CURRENT
     global MODEL_STATUS, MODEL_STATUS_DETAIL
+    global MODEL_METADATA_MATCHES, SERVED_MODEL_PROVENANCE
     MODEL_STATUS = "loading"
     MODEL_STATUS_DETAIL = "loading model artifacts"
     try:
@@ -167,10 +175,44 @@ def load_model() -> None:
         with open(MODELS_DIR / "model_metadata.json") as f:
             METADATA = json.load(f)
             FEATURES = METADATA.get("features", [])
-            if "crop_median_mape" in METADATA:
-                CROP_MAPE = METADATA["crop_median_mape"]
-            elif "crop_mape" in METADATA:
-                CROP_MAPE = METADATA["crop_mape"]
+
+            # Reconcile the published metadata with the artifact actually loaded.
+            # The frontend's crop MAPE/uncertainty are derived from this table, so
+            # it must describe the serving model — never a different one.
+            served_algorithm = type(MODEL).__name__ if MODEL is not None else ""
+            meta_algorithm = str(METADATA.get("algorithm", "")) or ""
+            if meta_algorithm and served_algorithm:
+                MODEL_METADATA_MATCHES = meta_algorithm == served_algorithm
+                if not MODEL_METADATA_MATCHES:
+                    logger.warning(
+                        "model_metadata.json algorithm=%r does not match the loaded "
+                        "artifact %r; keeping the artifact-consistent CROP_MAPE so the "
+                        "displayed accuracy always describes the serving model.",
+                        meta_algorithm, served_algorithm,
+                    )
+            else:
+                MODEL_METADATA_MATCHES = None
+            try:
+                import sklearn as _sk
+                sklearn_runtime = _sk.__version__
+            except Exception:
+                sklearn_runtime = "unknown"
+            SERVED_MODEL_PROVENANCE = {
+                "algorithm": served_algorithm,
+                "n_features": int(getattr(MODEL, "n_features_in_", 0) or 0),
+                "metadata_algorithm": meta_algorithm,
+                "metadata_matches": MODEL_METADATA_MATCHES,
+                "sklearn_runtime": sklearn_runtime,
+            }
+
+            # Adopt metadata accuracy only when it describes the served model
+            # (matches or the doc simply omits `algorithm`); a mismatched doc must
+            # never relabel the running model's real error.
+            if MODEL_METADATA_MATCHES is not False:
+                if "crop_median_mape" in METADATA:
+                    CROP_MAPE = METADATA["crop_median_mape"]
+                elif "crop_mape" in METADATA:
+                    CROP_MAPE = METADATA["crop_mape"]
             if "crop_msp" in METADATA:
                 MSP_CURRENT = METADATA["crop_msp"]
         

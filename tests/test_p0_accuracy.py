@@ -228,7 +228,8 @@ def test_prediction_bounds_use_crop_mape_not_fixed_percent():
             return np.array([1000.0])
 
     with patch.object(ml_service, "MODEL", _FlatModel()), \
-         patch.object(ml_service, "METADATA", {"algorithm": "cat", "notes": ""}):
+         patch.object(ml_service, "METADATA", {"algorithm": "cat", "notes": ""}), \
+         patch.object(ml_service, "CROP_MAPE", {"Tomato": 27.84, "Maize": 8.61}):
         res_tomato = ml_service.make_prediction(np.array([[1.0, 2.0]]), 1000.0, commodity="Tomato")
         res_maize  = ml_service.make_prediction(np.array([[1.0, 2.0]]), 1000.0, commodity="Maize")
 

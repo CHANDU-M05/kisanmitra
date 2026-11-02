@@ -61,6 +61,11 @@ async def health(db: AsyncSession = Depends(get_db)) -> dict:
         "model_status": ml_service.MODEL_STATUS,
         "model_detail": ml_service.MODEL_STATUS_DETAIL,
         "features": len(ml_service.FEATURES) if model_ok else 0,
+        # Served-model provenance: the artifact actually in memory vs what
+        # model_metadata.json claims. Surfaced so a metadata/model drift is an
+        # observable health signal, not a silent mislabel of displayed accuracy.
+        "model_provenance": ml_service.SERVED_MODEL_PROVENANCE,
+        "model_metadata_matches": ml_service.MODEL_METADATA_MATCHES,
         "declarations": decl_count,
         "latest_price_date": latest_date_str,
         "price_feed_age_days": feed_age,
