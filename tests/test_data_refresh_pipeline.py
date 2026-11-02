@@ -188,6 +188,30 @@ def test_dedupe_ignores_letter_case_of_mandi_names():
     assert (len(unique), dropped) == (1, 1)
 
 
+def test_ragi_alias_spellings_dedupe_into_one_day_with_no_database():
+    """Pure, DB-free proof of the Ragi split fix (commit 3fee562): a single batch
+    carrying BOTH the live `Ragi(Finger Millet)` spelling and the legacy
+    `Ragi (Finger Millet)` alias for the same mandi/day must normalize to the one
+    canonical `Ragi` identity AND collapse to a single record in dedupe_records.
+    This is the property that stops a refresh growing a parallel series beside the
+    seeded history — proved here with only normalize_record + dedupe_records, so
+    neither the external API nor a database is contacted."""
+    raw = [
+        {"State": "Karnataka", "District": "Kolar", "Market": "Kolar",
+         "Commodity": "Ragi(Finger Millet)", "Arrival_Date": "15/10/2026", "Modal_Price": "2600"},
+        {"State": "Karnataka", "District": "Kolar", "Market": "Kolar",
+         "Commodity": "Ragi (Finger Millet)", "Arrival_Date": "15/10/2026", "Modal_Price": "2600"},
+    ]
+    normalized = [data_refresh.normalize_record(r) for r in raw]
+    assert all(n is not None for n in normalized)
+    # one canonical identity for both spellings
+    assert {n["commodity"] for n in normalized} == {"Ragi"}
+    # both alias spellings describe the same mandi day -> exactly one row survives
+    unique, dropped = data_refresh.dedupe_records(normalized)
+    assert len(unique) == 1
+    assert dropped == 1
+
+
 # ── Live PostgreSQL integration (fake fetcher, real writes) ───────────────────
 
 def _db_reachable() -> bool:
