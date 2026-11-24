@@ -6,6 +6,9 @@ import L from 'leaflet';
 import 'leaflet/dist/leaflet.css';
 import { derive_current_season, get_season_options } from '../config';
 import { fetchJson, cachedGet, apiUrl } from '../api';
+import {
+  buildRadarRow, tileFallbackNote, useMapSource, TILE_ATTRIBUTION,
+} from '../saturationMap';
 
 export default function InsightsView() {
   const [season, setSeason] = useState(derive_current_season);
@@ -54,6 +57,7 @@ export default function InsightsView() {
   const getRiskColor = (status) => {
     if (status === 'HIGH') return '#ef4444'; // red-500
     if (status === 'MEDIUM') return '#f59e0b'; // amber-500
+    if (status === 'UNKNOWN') return '#94a3b8'; // slate-400 — never dress "no data" as safe
     return '#10b981'; // emerald-500
   };
 
@@ -87,7 +91,10 @@ export default function InsightsView() {
       case 'MEDIUM':
         return 'bg-amber-50 text-amber-700 border border-amber-200 dark:bg-amber-500/10 dark:text-amber-400 dark:border-amber-500/20';
       case 'LOW':
-        return 'bg-emerald-50 text-emerald-700 border border-emerald-250 dark:bg-emerald-500/10 dark:text-emerald-450 dark:border-emerald-500/20';
+        return 'bg-emerald-50 text-emerald-700 border border-emerald-200 dark:bg-emerald-500/10 dark:text-emerald-400 dark:border-emerald-500/20';
+      case 'NO DATA':
+        // No declarations → not measured → not safe. Use slate/muted, never emerald.
+        return 'bg-slate-100 text-slate-500 border border-slate-300 dark:bg-slate-500/10 dark:text-slate-400 dark:border-slate-500/30';
       default:
         return 'bg-slate-50 text-slate-600 border border-slate-200 dark:bg-white/[0.02] dark:text-slate-400 dark:border-white/5';
     }
@@ -149,27 +156,7 @@ export default function InsightsView() {
                 console.error(`Error loading saturation for ${q.district}/${q.crop}`, err);
                 return null; // one bad pair must not sink the whole map
               })
-              .then(raw => {
-                const item = raw || {};
-                const sat = Number(item.saturation_pct ?? 0.0) || 0.0;
-                let status = item.risk_level;
-                let action = 'Maintain Base State';
-
-                // Active intervention modeling when saturation exceeds simulated 60% threshold
-                if (sat >= 60.0) { status = 'HIGH'; action = 'CEASE SUBSIDIZED CREDIT'; }
-                else if (sat >= 40.0) { status = 'MEDIUM'; action = 'Cap Fertilizer Loans'; }
-                else { status = 'LOW'; action = 'Maintain Base State'; }
-
-                // Coerce identity fields to strings so filteredRadar's
-                // .toLowerCase() can never throw on a malformed/missing row.
-                return {
-                  district: String(item.district ?? q.district ?? ''),
-                  crop: String(item.crop ?? q.crop ?? ''),
-                  saturation: sat,
-                  action: action,
-                  status: status || 'LOW'
-                };
-              })
+              .then(raw => buildRadarRow(q, raw))
           )
         );
       })
@@ -202,6 +189,24 @@ export default function InsightsView() {
   const maxAllocation = allocationData.reduce((m, a) => Math.max(m, a.value), 0) || 1;
   const totalAllocated = allocationData.reduce((s, a) => s + a.value, 0);
 
+  // When the chosen cycle holds no declarations, the backend answers from the
+  // newest cycle that does. That is more useful than an empty map, but only if
+  // the screen says which cycle the numbers belong to.
+  const fallbackSeasons = Array.from(new Set(
+    interventionRadar
+      .filter(item => item.seasonFallback && item.season)
+      .map(item => item.season)
+  ));
+  const seasonFallbackNote = fallbackSeasons.length
+    ? `Showing ${fallbackSeasons.join(', ')} — no declarations in ${season}`
+    : '';
+
+  // Basemap is a nice-to-have, never a gate. We do not request external tiles by
+  // default (CartoDB returns an "API KEY REQUIRED" watermark as a successful
+  // tile); Leaflet shows its themed background with the live markers on top.
+  // A raster provider can be opted into via VITE_MAP_TILE_URL (src/saturationMap.js).
+  const { source: mapSource, tileEventHandlers } = useMapSource({});
+
   return (
     <div className="space-y-6">
       {/* Top filter bar */}
@@ -223,20 +228,30 @@ export default function InsightsView() {
           <input
             type="text"
             placeholder="Filter district or crop..."
+            aria-label="Filter by district or crop"
             value={filterQuery}
             onChange={(e) => setFilterQuery(e.target.value)}
-            className="bg-white border border-slate-200 px-3 py-1.5 text-xs font-medium text-slate-800 focus:outline-none focus:border-emerald-500 rounded-xl dark:bg-slate-900/60 dark:border-white/10 dark:text-slate-200 w-44"
+            className="bg-white border border-slate-200 px-3 py-1.5 text-xs font-medium text-slate-800 focus:outline-none focus:border-emerald-500 focus:ring-2 focus:ring-emerald-500/40 rounded-xl dark:bg-slate-900/60 dark:border-white/10 dark:text-slate-200 w-44"
           />
           <div className="flex items-center gap-2">
-            <span className="text-[10px] font-bold text-slate-600 dark:text-slate-400 uppercase tracking-wider">Cycle:</span>
+            <label htmlFor="cycle-select" className="text-[10px] font-bold text-slate-600 dark:text-slate-400 uppercase tracking-wider">Cycle:</label>
             <select
+              id="cycle-select"
               value={season}
               onChange={(e) => setSeason(e.target.value)}
-              className="bg-white border border-slate-200 px-3 py-1.5 text-xs font-bold text-slate-800 focus:outline-none focus:border-emerald-500 rounded-xl cursor-pointer dark:bg-slate-900/60 dark:border-white/10 dark:text-slate-200"
+              className="bg-white border border-slate-200 px-3 py-1.5 text-xs font-bold text-slate-800 focus:outline-none focus:border-emerald-500 focus:ring-2 focus:ring-emerald-500/40 rounded-xl cursor-pointer dark:bg-slate-900/60 dark:border-white/10 dark:text-slate-200"
             >
               {get_season_options().map(s => <option key={s} value={s}>{s}</option>)}
             </select>
           </div>
+          {seasonFallbackNote && (
+            <span
+              title="The selected cycle has no sowing declarations for these districts, so the figures shown come from the most recent cycle that does."
+              className="text-[10px] font-semibold text-amber-700 dark:text-amber-400 bg-amber-50 border border-amber-200 rounded-lg px-2 py-1"
+            >
+              {seasonFallbackNote}
+            </span>
+          )}
         </div>
       </div>
 
@@ -248,7 +263,7 @@ export default function InsightsView() {
       )}
 
       {loading ? (
-        <div className="h-64 bg-white border border-slate-200 rounded-2xl flex items-center justify-center text-xs font-bold text-slate-600 animate-pulse shadow-sm dark:bg-white/5 dark:border-white/10 dark:text-slate-450">
+        <div role="status" aria-live="polite" className="h-64 bg-white border border-slate-200 rounded-2xl flex items-center justify-center text-xs font-bold text-slate-600 animate-pulse shadow-sm dark:bg-white/5 dark:border-white/10 dark:text-slate-450">
           Ingesting Real-time Database Metrics...
         </div>
       ) : (
@@ -258,7 +273,7 @@ export default function InsightsView() {
               <h3 className="text-xs font-bold uppercase tracking-wider text-slate-800 dark:text-white flex flex-wrap items-center gap-x-2 gap-y-1 border-b border-slate-100 dark:border-white/5 pb-3 mb-4">
                 <Shield className="h-4 w-4 text-emerald-500" /> Crop Allocation
                 <span className="text-[9px] font-semibold normal-case tracking-normal text-slate-500 dark:text-slate-400">
-                  live sowing declarations by count · {totalAllocated} records · all seasons
+                  live sowing declarations by count · {totalAllocated} total records · cross-season
                 </span>
               </h3>
               <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-x-6 gap-y-3">
@@ -282,11 +297,11 @@ export default function InsightsView() {
             </div>
           )}
 
-        /* Main Split Grid */
+        {/* Main Split Grid */}
         <div className="grid grid-cols-1 lg:grid-cols-10 gap-6">
           
           {/* Left: Interactive Map */}
-          <div className="lg:col-span-4 bg-white border border-slate-200 rounded-2xl p-0 flex flex-col overflow-hidden h-[360px] shadow-sm dark:bg-slate-900/50 dark:backdrop-blur-xl dark:border-white/10 relative">
+          <div className="lg:col-span-4 bg-white border border-slate-200 rounded-2xl p-0 flex flex-col overflow-hidden h-[400px] shadow-sm dark:bg-slate-900/50 dark:backdrop-blur-xl dark:border-white/10 relative">
             <div className="absolute top-0 left-0 right-0 z-[1000] p-4 bg-gradient-to-b from-white/90 to-transparent dark:from-slate-950/90 pointer-events-none">
               <h3 className="text-xs font-bold uppercase tracking-wider text-slate-800 dark:text-white flex items-center gap-1.5">
                 <MapPin className="h-4 w-4 text-emerald-500" />
@@ -305,13 +320,23 @@ export default function InsightsView() {
                 className="w-full h-full bg-slate-100 dark:bg-slate-900"
                 style={{ background: document.documentElement.classList.contains('dark') ? '#09090b' : '#f4f4f5' }}
               >
-                <TileLayer
-                  url={document.documentElement.classList.contains('dark')
-                    ? 'https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png'
-                    : 'https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r}.png'
-                  }
-                  attribution='&copy; <a href="https://carto.com/">CartoDB</a>'
-                />
+                {mapSource.kind === 'tiles' ? (
+                  <TileLayer
+                    url={mapSource.tileUrl}
+                    attribution={TILE_ATTRIBUTION}
+                    eventHandlers={tileEventHandlers}
+                  />
+                ) : (
+                  /* No external tile provider by default. CartoDB now serves an
+                     "API KEY REQUIRED" watermark as a SUCCESSFUL (HTTP 200) tile,
+                     so it painted that message behind the live markers and
+                     `tileerror` never fired. Leaflet simply shows its themed
+                     background here and the real saturation markers on top — no
+                     third-party dependency, no placeholder, no watermark. */
+                  <div className="absolute bottom-2 left-2 z-[600] text-[9px] font-bold uppercase tracking-wider text-slate-500 dark:text-slate-400 bg-white/70 dark:bg-slate-900/70 border border-slate-200 dark:border-white/10 rounded-lg px-2 py-1 pointer-events-none">
+                    {tileFallbackNote()}
+                  </div>
+                )}
                 
                 <FitBounds 
                   positions={filteredRadar.map(n => DISTRICT_COORDS[n.district]).filter(Boolean)} 
@@ -327,18 +352,22 @@ export default function InsightsView() {
                       position={position} 
                       icon={createPulseIcon(getRiskColor(node.status))}
                     >
-                      <LeafletTooltip direction="right" offset={[15, 0]} opacity={1} permanent className="custom-map-tooltip">
-                        {node.district}
+                      <LeafletTooltip direction="right" offset={[15, 0]} opacity={0.95} className="custom-map-tooltip">
+                        <span className="font-black">{node.district}</span>
+                        <br />
+                        <span className="text-[9px]">{node.crop}{!node.saturationUnavailable ? ` · ${node.saturation.toFixed(1)}%` : ' · no data'}</span>
                       </LeafletTooltip>
                       <Popup className="font-sans text-xs">
                         <div className="font-bold mb-1 uppercase tracking-wider border-b pb-1 text-slate-800">
-                          {node.district} Node
+                          {node.district}
                         </div>
-                        <div className="space-y-1 mt-2 text-slate-600">
-                          <div><span className="font-semibold">Target Crop:</span> {node.crop}</div>
-                          <div><span className="font-semibold">Saturation:</span> {node.saturation.toFixed(1)}%</div>
-                          <div><span className="font-semibold">Risk Level:</span> <span style={{color: getRiskColor(node.status), fontWeight: 'bold'}}>{node.status}</span></div>
-                          <div className="mt-2 pt-2 border-t font-mono text-[9px] font-bold text-slate-500">PROTOCOL: {node.action}</div>
+                        <div className="space-y-1 mt-2 text-slate-600 text-[11px]">
+                          <div><span className="font-semibold">Crop:</span> {node.crop}</div>
+                          <div><span className="font-semibold">Saturation:</span> {node.saturationUnavailable ? 'Data unavailable' : <span className="font-mono font-bold">{node.saturation.toFixed(1)}%</span>}</div>
+                          {node.season && <div><span className="font-semibold">Season:</span> {node.season}{node.seasonFallback ? ' (fallback)' : ''}</div>}
+                          <div><span className="font-semibold">Status:</span> <span style={{color: getRiskColor(node.status), fontWeight: 'bold'}}>{node.status}</span></div>
+                          {node.farmerCount != null && <div><span className="font-semibold">Declarations:</span> {node.farmerCount}</div>}
+                          <div className="mt-2 pt-2 border-t font-mono text-[9px] font-bold text-slate-500 uppercase">Advisory: {node.action}</div>
                         </div>
                       </Popup>
                     </Marker>
@@ -349,9 +378,10 @@ export default function InsightsView() {
             
             {/* Map Legend Overlay */}
             <div className="absolute bottom-4 right-4 z-[1000] bg-white/90 dark:bg-slate-950/90 backdrop-blur border border-slate-200 dark:border-white/10 p-2.5 rounded-xl shadow-lg flex flex-col gap-1.5 text-[9px] font-bold uppercase tracking-wider text-slate-600 dark:text-slate-400">
-              <div className="flex items-center gap-2"><div className="w-2.5 h-2.5 rounded-full bg-emerald-500 shadow-[0_0_8px_rgba(16,185,129,0.8)]"></div> OPTIMAL / SAFE</div>
-              <div className="flex items-center gap-2"><div className="w-2.5 h-2.5 rounded-full bg-amber-500 shadow-[0_0_8px_rgba(245,158,11,0.8)]"></div> CAUTION / MONITOR</div>
-              <div className="flex items-center gap-2"><div className="w-2.5 h-2.5 rounded-full bg-red-500 shadow-[0_0_8px_rgba(239,68,68,0.8)]"></div> RISK / CAPPED</div>
+              <div className="flex items-center gap-2"><div className="w-2.5 h-2.5 rounded-full bg-emerald-500 shadow-[0_0_8px_rgba(16,185,129,0.8)]"></div> SAFE (LOW)</div>
+              <div className="flex items-center gap-2"><div className="w-2.5 h-2.5 rounded-full bg-amber-500 shadow-[0_0_8px_rgba(245,158,11,0.8)]"></div> CAUTION</div>
+              <div className="flex items-center gap-2"><div className="w-2.5 h-2.5 rounded-full bg-red-500 shadow-[0_0_8px_rgba(239,68,68,0.8)]"></div> RISK</div>
+              <div className="flex items-center gap-2"><div className="w-2.5 h-2.5 rounded-full bg-slate-400 shadow-[0_0_8px_rgba(148,163,184,0.5)]"></div> DATA N/A</div>
             </div>
             
             {/* Global style override to ensure Leaflet popups match our aesthetic if needed, though Tailwind does most of it */}
@@ -439,7 +469,7 @@ export default function InsightsView() {
           </div>
 
           {/* Right: Intervention Table */}
-          <div className="lg:col-span-6 bg-white border border-slate-200 rounded-2xl p-5 flex flex-col justify-between h-[360px] shadow-sm dark:bg-white/5 dark:backdrop-blur-xl dark:border-white/10">
+          <div className="lg:col-span-6 bg-white border border-slate-200 rounded-2xl p-5 flex flex-col min-h-[360px] max-h-[520px] shadow-sm dark:bg-white/5 dark:backdrop-blur-xl dark:border-white/10">
             <div>
               <h3 className="text-xs font-bold uppercase tracking-wider text-slate-800 dark:text-white flex items-center gap-1.5 border-b border-slate-100 dark:border-white/5 pb-3 mb-3">
                 {isAdmin ? 'Intervention Protocol Registry' : 'District Sowing Capacity Guide'}
@@ -463,10 +493,15 @@ export default function InsightsView() {
                       <td className="p-3 font-semibold text-slate-800 dark:text-slate-400">{row.crop}</td>
                       <td className="p-3 text-right font-mono font-bold">
                         <span className={`inline-block px-2.5 py-0.5 text-[10px] font-bold rounded ${getStatusStyle(row.status)}`}>
-                          {row.saturation.toFixed(2)}%
+                          {row.saturationUnavailable ? 'N/A · no data' : `${row.saturation.toFixed(2)}%`}
                         </span>
                       </td>
                       <td className="p-3 text-right font-bold flex items-center justify-end gap-1.5">
+                        {row.status === 'UNKNOWN' && (
+                          <span className="text-slate-500 dark:text-slate-400 bg-slate-100 dark:bg-white/5 border border-slate-200 dark:border-white/10 px-2 py-0.5 rounded text-[10px] uppercase font-mono tracking-wider">
+                            DATA UNAVAILABLE
+                          </span>
+                        )}
                         {isAdmin ? (
                           <>
                             {row.status === 'HIGH' && <AlertTriangle className="h-3.5 w-3.5 text-red-500 shrink-0" />}

@@ -7,10 +7,14 @@ price_service.get_price_forecast issues a fixed sequence of queries:
   1c. feed-newest probe    -> .scalar_one_or_none()  (only when the SLA gate fires)
   2. arrivals row          -> .first()  (by the RESOLVED MARKET only)
   3. history count probe   -> .all()    (>=3 rows keeps ml_service off its synthetic branch)
+  4. distribution probe    -> .one()    (min/max/avg/stddev/count for the two-year
+                                         credibility gate on the published forecast)
 
 Dates are expressed as days_old relative to TODAY because the freshness SLA gate
 actively rejects stale fixtures — a hard-coded October date silently becomes a
-lie the moment the suite runs in November.
+lie the moment the suite runs in November. "Today" is the MARKET calendar (IST),
+the same frame the service and the ingestion window use, so the suite is honest
+on a UTC host at UTC evening exactly as on an IST host.
 """
 from __future__ import annotations
 
@@ -19,13 +23,25 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
 
 from backend.core.config import settings
+from backend.services.data_refresh import MARKET_TZ, market_today
+
+
+def market_day(days_old: int = 0) -> datetime.datetime:
+    """Midnight of the market date `days_old` back, as a tz-aware datetime.
+
+    Fixtures must be anchored to IST (the calendar AGMARKNET stamps rows with),
+    not to the host clock — otherwise a UTC host in the evening measures every
+    fixture a day younger than the service does.
+    """
+    return datetime.datetime.combine(market_today() - datetime.timedelta(days=days_old),
+                                     datetime.time(), tzinfo=MARKET_TZ)
 
 # ── Row builders ──────────────────────────────────────────────────────────────
 
 def price_row(modal_price, market="Kolar", district="Kolar", days_old=0):
     return SimpleNamespace(
         modal_price=modal_price,
-        arrival_date=datetime.datetime.now() - datetime.timedelta(days=days_old),
+        arrival_date=market_day(days_old),
         market=market,
         district=district,
     )
@@ -34,7 +50,7 @@ def price_row(modal_price, market="Kolar", district="Kolar", days_old=0):
 def arrivals_row(tonnes, market="Kolar", days_old=0):
     return SimpleNamespace(
         arrivals_tonnes=tonnes,
-        arrival_date=datetime.datetime.now() - datetime.timedelta(days=days_old),
+        arrival_date=market_day(days_old),
         market=market,
     )
 
@@ -66,9 +82,23 @@ def feed_newest_res(days_old: int = 0) -> MagicMock:
     whether the whole feed is behind (upstream outage) or just this crop.
     """
     res = MagicMock()
-    res.scalar_one_or_none.return_value = (
-        datetime.datetime.now() - datetime.timedelta(days=days_old)
-    )
+    res.scalar_one_or_none.return_value = market_day(days_old)
+    return res
+
+
+def dist_probe(price=1000.0, records: int = 50, low_ratio=0.5,
+               high_ratio=2.0) -> MagicMock:
+    """
+    Result of the two-year price-distribution probe the forecast credibility
+    gate reads (min, max, avg, stddev, count).
+
+    The default describes an ordinary market: the fixture price sits mid-range
+    with history spanning half to double it, so a plausible forecast passes and
+    a caller can force the warning path by narrowing low_ratio/high_ratio.
+    """
+    res = MagicMock()
+    res.one.return_value = (price * low_ratio, price * high_ratio, price,
+                            price * 0.1, records)
     return res
 
 
@@ -95,6 +125,7 @@ def price_db(price=2000.0, arrivals=80.0, days_old=0, market="Kolar",
             spot,
             _res_with_first(arrivals_row(arrivals, market, arrivals_days_old)),
             history_probe(history_rows),
+            dist_probe(price),
         ]
     db = AsyncMock()
     db.execute = AsyncMock(side_effect=seq)
@@ -104,14 +135,22 @@ def price_db(price=2000.0, arrivals=80.0, days_old=0, market="Kolar",
 
 
 def price_db_state_fallback(price=1500.0, arrivals=60.0, days_old=0,
-                           state_market="Yeshvantapur", history_rows=5):
-    """District miss then state-wide hit: 4 queries (price x2, arrivals, history)."""
+                           state_market="Chikkaballapur", history_rows=5):
+    """District miss then state-wide hit: 4 queries (price x2, arrivals, history).
+
+    The default fallback mandi is one the model was trained on. That matters:
+    against an untrained mandi the service legitimately refuses with
+    type="unsupported_vocabulary", so a test that forgot to override this would
+    be exercising the refusal instead of the fallback labelling it claims to
+    test. Tests that want the refusal pass an untrained name explicitly.
+    """
     db = AsyncMock()
     db.execute = AsyncMock(side_effect=[
         empty_first(),
         _res_with_first(price_row(price, state_market, "Karnataka", days_old)),
         _res_with_first(arrivals_row(arrivals, state_market, days_old)),
         history_probe(history_rows),
+        dist_probe(price),
     ])
     db.add = MagicMock()
     db.commit = AsyncMock()
@@ -137,7 +176,7 @@ def market_row(price=2000.0, market="Kolar", district="Kolar", days_old=0,
     """
     return SimpleNamespace(
         modal_price=price,
-        arrival_date=datetime.datetime.now() - datetime.timedelta(days=days_old),
+        arrival_date=market_day(days_old),
         market=market,
         district=district,
         arrivals_tonnes=arrivals,
@@ -150,7 +189,7 @@ def market_db(price=2000.0, days_old=0, arrivals=80.0, market="Kolar",
     """
     AsyncMock DB for a named-mandi lookup.
 
-    Fresh row    -> 2 queries (spot+tonnage in one row, history probe).
+    Fresh row    -> 3 queries (spot+tonnage in one row, history probe, distribution).
     Stale row    -> 2 queries (spot, feed-newest probe) and no history work.
     Missing row  -> 1 query, then the service must refuse to invent a price.
     """
@@ -163,7 +202,8 @@ def market_db(price=2000.0, days_old=0, arrivals=80.0, market="Kolar",
                                if feed_newest_days_old is not None else days_old)]
     else:
         seq = [market_res(market_row(price, market, district, days_old, arrivals)),
-               history_probe(history_rows)]
+               history_probe(history_rows),
+               dist_probe(price)]
     db.execute = AsyncMock(side_effect=seq)
     db.add = MagicMock()
     db.commit = AsyncMock()

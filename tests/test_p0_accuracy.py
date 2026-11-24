@@ -26,6 +26,7 @@ import pytest
 from price_test_helpers import (
     price_db, price_db_no_data, price_db_state_fallback,
 )
+from conftest import TRAINED_MARKET, UNTRAINED_MARKET
 
 
 def _patched_ml(db):
@@ -44,7 +45,10 @@ def _patched_ml(db):
 
 
 def _as_of(days_old: int) -> str:
-    return (datetime.date.today() - datetime.timedelta(days=days_old)).isoformat()
+    # Market calendar (IST): the service measures ages against the same frame
+    # AGMARKNET stamps rows with, not against the host clock.
+    from backend.services.data_refresh import market_today
+    return (market_today() - datetime.timedelta(days=days_old)).isoformat()
 
 
 # ── A1/A4: no fabricated prices ────────────────────────────────────────────────
@@ -69,11 +73,23 @@ async def test_price_no_data_when_db_has_no_rows():
 
 
 @pytest.mark.asyncio
-async def test_price_state_fallback_is_labeled_and_dated():
-    """District miss + state-wide hit → data_source='state_fallback', real source market, as-of date."""
+async def test_price_state_fallback_is_labeled_and_dated(trained_vocabulary):
+    """District miss + state-wide hit → data_source='state_fallback', real source market, as-of date.
+
+    The fallback mandi is one the model was trained on, asserted through
+    `resolve_class`, and the encoders are installed explicitly by the fixture.
+    Both matter: this test used to name Yeshvantapur (untrained) and to pass
+    only because `ml_service.ENCODERS` happened to be None in that process, so
+    the trained-vocabulary gate abstained. Any test that loaded encoders first
+    turned every "forecast" assertion into an `unsupported_vocabulary` refusal
+    — which is the order dependence this now removes.
+    """
+    from backend.services import ml_service
     from backend.services.price_service import get_price_forecast
 
-    db = price_db_state_fallback(price=1500.0, days_old=2, state_market="Yeshvantapur")
+    assert ml_service.resolve_class("market", TRAINED_MARKET) == TRAINED_MARKET
+
+    db = price_db_state_fallback(price=1500.0, days_old=2, state_market=TRAINED_MARKET)
 
     with patch("backend.services.ml_service.MODEL", new=MagicMock()), \
          patch("backend.services.ml_service.build_features",
@@ -88,13 +104,50 @@ async def test_price_state_fallback_is_labeled_and_dated():
 
     assert result["type"] == "forecast"
     assert result["data_source"] == "state_fallback"
-    assert result["source_market"] == "Yeshvantapur"
+    assert result["source_market"] == TRAINED_MARKET
     assert result["price_as_of"] == _as_of(2)
     assert result["current_price"] == 1500.0
     # The farmer must be told the price is not from their own district.
     assert "other_market_price" in result["data_quality"]
     # Model was given the ACTUAL market name, not the farmer's district.
-    assert mock_feat.await_args.args[4] == "Yeshvantapur"
+    assert mock_feat.await_args.args[4] == TRAINED_MARKET
+
+
+@pytest.mark.asyncio
+async def test_price_state_fallback_refuses_a_mandi_the_model_never_saw(trained_vocabulary):
+    """The other half of the same rule: a real mandi that is not trained yields no number.
+
+    Yeshvantapur is a live Bangalore mandi with genuine rows, so the state-wide
+    lookup succeeds — and the forecast must still be refused, because a
+    LabelEncoder cannot score a category it never trained on. The spot price
+    stays disclosed; only the invented forecast is withheld.
+    """
+    from backend.services import ml_service
+    from backend.services.price_service import get_price_forecast
+
+    assert ml_service.resolve_class("market", UNTRAINED_MARKET) is None
+
+    db = price_db_state_fallback(price=1500.0, days_old=2, state_market=UNTRAINED_MARKET)
+
+    with patch("backend.services.ml_service.MODEL", new=MagicMock()), \
+         patch("backend.services.ml_service.build_features",
+              new_callable=AsyncMock, return_value={}) as mock_feat, \
+         patch("backend.services.ml_service.make_prediction",
+              return_value={"pred": 1600.0, "low": 1200.0, "high": 2000.0}), \
+         patch("backend.services.ml_service.price_signal",
+              return_value=("NEUTRAL — Monitor weekly", "ಸ್ಥಿರ")), \
+         patch("backend.services.ml_service.crop_prediction_meta",
+              return_value={"crop_mape_pct": 27.84, "msp_floor": None}):
+        result = await get_price_forecast("Tomato", "Dharwad", db)
+
+    assert result["type"] == "unsupported_vocabulary"
+    assert result["missing_axes"] == ["market"]
+    assert result["crop_mape_pct"] is None
+    assert result["source_market"] == UNTRAINED_MARKET
+    # The observation is real and stays disclosed; the forecast does not exist.
+    assert result["current_price"] == 1500.0
+    assert "forecast" not in result and "signal" not in result
+    mock_feat.assert_not_awaited()
 
 
 @pytest.mark.asyncio
@@ -111,7 +164,7 @@ async def test_price_district_hit_not_labeled_fallback():
     assert result["price_as_of"] == _as_of(1)
     assert result["days_old"] == 1
     assert result["data_quality"] == []
-    assert db.execute.await_count == 3  # price + arrivals + history probe; no state-wide query
+    assert db.execute.await_count == 4  # price + arrivals + history + distribution probe; no state-wide query
 
 
 # ── B1: fuzzy typo resolution + cross-domain trap guard ───────────────────────

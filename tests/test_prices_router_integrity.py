@@ -29,7 +29,7 @@ from fastapi.testclient import TestClient
 from backend.core.config import settings
 from backend.core.database import get_db
 from backend.routers import prices
-from price_test_helpers import empty_first, history_probe, market_db, market_res, market_row
+from price_test_helpers import dist_probe, empty_first, history_probe, market_day, market_db, market_res, market_row
 
 
 def _ml_patches():
@@ -76,8 +76,7 @@ def test_predict_gates_a_stale_mandi_record():
     assert body["signal"] is None
     assert body["days_old"] == 10
     assert body["max_age_days"] == settings.price_max_age_days
-    assert body["price_as_of"] == (
-        datetime.date.today() - datetime.timedelta(days=10)).isoformat()
+    assert body["price_as_of"] == market_day(10).date().isoformat()
     assert body["stale_reason"] == "upstream_not_published"
     assert "forecast" not in body and "lower" not in body
 
@@ -174,7 +173,7 @@ def test_predict_labels_caller_supplied_arrivals_as_a_scenario():
 def test_predict_discloses_unrecorded_arrivals_instead_of_defaulting_to_100():
     row = market_row(price=2000.0, days_old=0, arrivals=None)
     db = market_db(price=2000.0, days_old=0)
-    db.execute = AsyncMock(side_effect=[market_res(row), history_probe(5)])
+    db.execute = AsyncMock(side_effect=[market_res(row), history_probe(5), dist_probe(2000.0)])
     with _predict_client(db) as client:
         body = client.get("/prices/predict?commodity=Tomato&market=Kolar").json()
 
@@ -319,8 +318,7 @@ def test_latest_watch_reports_the_real_date_and_flags_it_stale():
     assert body[0]["state"] == "STALE"
     # A real movement is still reported, with the date it is measured against.
     assert body[0]["delta"] == 100.0
-    assert body[0]["as_of"] == (
-        datetime.date.today() - datetime.timedelta(days=53)).isoformat()
+    assert body[0]["as_of"] == market_day(53).date().isoformat()
 
 
 def test_latest_watch_delta_comes_from_the_same_mandi_only():

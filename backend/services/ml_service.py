@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import math
+import re
 from datetime import date, datetime, timedelta
 from pathlib import Path
 
@@ -204,6 +205,12 @@ def load_model() -> None:
                 "metadata_algorithm": meta_algorithm,
                 "metadata_matches": MODEL_METADATA_MATCHES,
                 "sklearn_runtime": sklearn_runtime,
+                # The coverage the model can actually answer for, surfaced on
+                # /health: a 6x40 vocabulary serving 11x152 live categories is
+                # the reason most pairs must report unavailable rather than a
+                # number, and an operator reading only the logs would never see it.
+                "trained_commodities": vocab_size("commodity"),
+                "trained_markets": vocab_size("market"),
             }
 
             # Adopt metadata accuracy only when it describes the served model
@@ -272,6 +279,131 @@ def get_season_label(month: int) -> str:
         return "Monsoon"
     else:
         return "Post-Monsoon"
+
+
+# ── Encoder vocabulary reconciliation ────────────────────────────────────────
+# The fitted encoders know 6 commodities and 40 bare mandi names, while live
+# AGMARKNET rows carry 11 commodities and 152 markets suffixed with "APMC"/
+# "Apmc". A label encoder has no unseen-category handling, so a miss used to
+# fall through to 0.0 — which is indistinguishable from the *legitimate* code
+# for the first sorted class ("Brinjal" / "Arasikere"). Every mismatching
+# forecast was therefore silently scored as "crop #0 at market #0", an
+# out-of-range blend of the whole training set, and published with full
+# confidence. These helpers resolve a live name to a real fitted class and
+# report a miss as a miss so the caller can refuse to forecast.
+#
+# Normalisation only reconciles *presentation* (suffix, case, punctuation). It
+# never invents a class: if the normalised name is not a fitted class, that
+# commodity/market was not in training and no number is defensible.
+_MARKET_SUFFIXES = ("apmc market committee", "apmc", "amc", "market yard",
+                    "yard", "market", "mandy")
+# Verified spellings only: live data publishes both "Ragi" and the trained
+# "Ragi (Finger Millet)"; both denote the same fitted class. Nothing is aliased
+# that is not confirmed present in classes_ (see encoder_coverage).
+_COMMODITY_ALIASES = {
+    "ragi": "Ragi (Finger Millet)",
+    "finger millet": "Ragi (Finger Millet)",
+    "ragi finger millet": "Ragi (Finger Millet)",
+}
+
+
+def _canonical(name: str | None) -> str:
+    """Lowercase, drop punctuation, and strip a trailing mandi suffix."""
+    text = re.sub(r"[^a-z0-9]+", " ", (name or "").lower()).strip()
+    changed = True
+    while changed:
+        changed = False
+        for suffix in _MARKET_SUFFIXES:
+            if text.endswith(" " + suffix):
+                text = text[: -len(suffix)].strip()
+                changed = True
+    return text
+
+
+_VOCAB_CACHE: dict[str, dict[str, str]] = {}
+
+
+def _vocab(axis: str) -> dict[str, str]:
+    """canonical form -> exact fitted class label, for one encoder axis."""
+    if ENCODERS is None or axis not in ENCODERS:
+        return {}
+    key = f"{id(ENCODERS[axis])}:{axis}"
+    if key not in _VOCAB_CACHE:
+        classes = getattr(ENCODERS[axis], "classes_", None)
+        # classes_ is a numpy array: `array or []` raises on the ambiguous truth
+        # value, so test for None explicitly.
+        if classes is None:
+            _VOCAB_CACHE[key] = {}
+        else:
+            _VOCAB_CACHE[key] = {_canonical(str(c)): str(c) for c in classes}
+    return _VOCAB_CACHE[key]
+
+
+def resolve_class(axis: str, value: str | None) -> str | None:
+    """The exact fitted class label `value` denotes, or None when untrained."""
+    if ENCODERS is None or axis not in ENCODERS:
+        return None
+    canonical = _canonical(value)
+    if not canonical:
+        return None
+    classes = _vocab(axis)
+    if canonical in classes:
+        return classes[canonical]
+    if axis == "commodity":
+        aliased = _COMMODITY_ALIASES.get(canonical)
+        if aliased and _canonical(aliased) in classes:
+            return classes[_canonical(aliased)]
+    return None
+
+
+def encoder_coverage(commodity: str, market: str) -> dict:
+    """Whether both categorical axes exist in the trained vocabulary.
+
+    Returns the resolved class labels plus the list of axes that are missing,
+    so an unavailable forecast can name the specific gap instead of emitting a
+    plausible-looking number. A missing axis is not a data-quality note: the
+    model cannot score a category it never saw.
+    """
+    commodity_class = resolve_class("commodity", commodity)
+    market_class = resolve_class("market", market)
+    missing = [name for name, cls in (("commodity", commodity_class),
+                                      ("market", market_class)) if cls is None]
+    encoders_available = ENCODERS is not None
+    return {
+        "commodity_class": commodity_class,
+        "market_class": market_class,
+        "missing": missing,
+        # When no encoders are loaded the caller cannot tell a genuine miss from
+        # an uninitialised artifact; readiness is already gated upstream, so do
+        # not claim a vocabulary verdict here.
+        "checked": encoders_available,
+        "supported": encoders_available and not missing,
+    }
+
+
+def vocab_size(axis: str) -> int:
+    """Number of fitted classes on one categorical axis (0 when unloaded)."""
+    return len(_vocab(axis))
+
+
+def supported_classes(axis: str) -> list[str]:
+    """The exact class labels the model can score on one axis, sorted."""
+    return sorted(_vocab(axis).values())
+
+
+def encode_categorical(axis: str, value: str, fallback: float = 0.0) -> float:
+    """Fitted encoder code for `value`, resolved through the normalised vocab.
+
+    `fallback` exists only for the no-ENCODERS unit-test path; the live pipeline
+    is gated by encoder_coverage before it can reach here.
+    """
+    resolved = resolve_class(axis, value)
+    if resolved is None:
+        return fallback
+    try:
+        return float(ENCODERS[axis].transform([resolved])[0])
+    except Exception:  # noqa: BLE001 - label vanished between check and use
+        return fallback
 
 
 async def build_features(
@@ -385,13 +517,20 @@ async def build_features(
     commodity_encoded = 0.0
     market_encoded = 0.0
     if ENCODERS:
-        try:
-            if "commodity" in ENCODERS and commodity in ENCODERS["commodity"].classes_:
-                commodity_encoded = float(ENCODERS["commodity"].transform([commodity])[0])
-            if "market" in ENCODERS and market in ENCODERS["market"].classes_:
-                market_encoded = float(ENCODERS["market"].transform([market])[0])
-        except Exception:
-            pass
+        # Resolved through the normalised vocabulary so a live "Ramanagara APMC"
+        # reaches the fitted class "Ramanagara". A genuine miss stays a miss:
+        # the 0.0 below is only reachable when the caller has not gated on
+        # encoder_coverage, and price_service always does.
+        commodity_encoded = encode_categorical("commodity", commodity)
+        market_encoded = encode_categorical("market", market)
+        missed = [axis for axis, value in (("commodity", commodity), ("market", market))
+                  if resolve_class(axis, value) is None]
+        if missed:
+            logger.warning(
+                "Encoding fell back to the default code for %s (%s): not in the "
+                "trained vocabulary. Forecasts for this pair are not defensible.",
+                missed, f"{commodity}@{market}",
+            )
 
     values: dict[str, float] = {
         "commodity_encoded": commodity_encoded,

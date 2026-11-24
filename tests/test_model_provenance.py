@@ -14,6 +14,13 @@ as the live model's accuracy. These tests pin the fixes:
      operator can see the served identity, not only "model_loaded".
   4. A metadata/model mismatch is DETECTED and the mismatched accuracy is
      NOT silently adopted (guard holds even for a totally different artifact).
+  5. With the real artifact loaded the trained-vocabulary gate is ACTIVE and
+     refuses an untrained mandi — the guard the whole forecast path depends on.
+
+Tests 1, 2, 3 and 5 assert facts about the served artifact itself, so they are
+marked `requires_served_model`: the artifact-free CI job must not run them and
+the certification job must not be able to report green without running them.
+Test 4 uses a throwaway in-memory artifact and therefore runs everywhere.
 """
 from __future__ import annotations
 
@@ -26,15 +33,21 @@ import pytest
 from sklearn.ensemble import RandomForestRegressor
 
 from backend.services import ml_service
+from conftest import TRAINING_VOCABULARY, TRAINED_MARKET, UNTRAINED_MARKET
 
 
 @pytest.fixture()
-def loaded():
-    """Load the real shipped model once; leave globals in the corrected state."""
-    ml_service.load_model()
-    return ml_service
+def loaded(served_model):
+    """The real shipped model, loaded fresh for one test.
+
+    `served_model` skips (loudly, naming the missing artifact) when the
+    checkout has none, and `tests/conftest.py` restores every global this
+    touches, so the load cannot leak into any later test.
+    """
+    return served_model
 
 
+@pytest.mark.requires_served_model
 def test_served_model_is_the_random_forest(loaded):
     assert loaded.SERVED_MODEL_PROVENANCE["algorithm"] == "RandomForestRegressor"
     assert loaded.SERVED_MODEL_PROVENANCE["n_features"] == 16
@@ -43,6 +56,7 @@ def test_served_model_is_the_random_forest(loaded):
     assert loaded.MODEL_METADATA_MATCHES is True
 
 
+@pytest.mark.requires_served_model
 def test_displayed_crop_mape_is_random_forest_not_catboost_median(loaded):
     # The mismatched key must no longer exist at the top level...
     assert "crop_median_mape" not in loaded.METADATA
@@ -54,6 +68,7 @@ def test_displayed_crop_mape_is_random_forest_not_catboost_median(loaded):
     assert loaded.CROP_MAPE["Tomato"] != pytest.approx(39.92)
 
 
+@pytest.mark.requires_served_model
 def test_health_exposes_model_provenance(loaded):
     from fastapi.testclient import TestClient
     from backend.main import app
@@ -65,6 +80,35 @@ def test_health_exposes_model_provenance(loaded):
     assert "model_provenance" in body
     assert body["model_provenance"]["algorithm"] == "RandomForestRegressor"
     assert body["model_metadata_matches"] is True
+
+
+@pytest.mark.requires_served_model
+def test_vocabulary_gate_is_active_when_the_artifact_is_loaded(loaded):
+    """The coverage guard must be reporting real verdicts, not abstaining.
+
+    `encoder_coverage()` returns `checked=False` while no encoders are loaded,
+    which silently disables the gate. With the served artifact present that
+    escape must be closed: a trained pair is supported, an untrained mandi is
+    refused by name, and the stand-in vocabulary the rest of the suite uses is
+    a subset of what the model actually knows.
+    """
+    assert loaded.ENCODERS is not None
+
+    trained = loaded.encoder_coverage("Tomato", TRAINED_MARKET)
+    assert trained["checked"] is True
+    assert trained["supported"] is True
+    assert trained["missing"] == []
+
+    untrained = loaded.encoder_coverage("Tomato", UNTRAINED_MARKET)
+    assert untrained["checked"] is True
+    assert untrained["supported"] is False
+    assert untrained["missing"] == ["market"]
+
+    # The fixture vocabulary other tests rely on may not invent classes.
+    for axis, classes in TRAINING_VOCABULARY.items():
+        assert set(classes) <= set(loaded.supported_classes(axis)), (
+            f"stand-in vocabulary has {axis} classes the served model lacks"
+        )
 
 
 def test_mismatched_metadata_is_detected_and_not_adopted(tmp_path):
@@ -95,6 +139,8 @@ def test_mismatched_metadata_is_detected_and_not_adopted(tmp_path):
         # The mismatched 99.9 was NOT imported; the original table is intact.
         assert ml_service.CROP_MAPE == sentinel
 
-    # Restore the real serving model so this test cannot leak throwaway globals
-    # (MODEL/FEATURES/METADATA/provenance) into later test files.
-    ml_service.load_model()
+    # No manual "restore by reloading the real model" step here: that call
+    # raised on any checkout without artifacts (three CI errors) and, before it
+    # raised, had already left the throwaway MODEL/ENCODERS/METADATA in the
+    # module for every later test file. tests/conftest.py restores the snapshot
+    # it took before this test ran, which works in both modes.

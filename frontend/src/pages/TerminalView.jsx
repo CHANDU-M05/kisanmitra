@@ -5,6 +5,7 @@ import { ShieldAlert, TrendingDown, Thermometer, HelpCircle, Layers, CheckCircle
 
 import Card from '../components/ui/Card';
 import { fetchJson, apiUrl } from '../api';
+import { derive_current_season } from '../config';
 import {
   buildChartData,
   deriveForecastView,
@@ -165,7 +166,9 @@ export default function TerminalView() {
 
   // Backend-supplied, never a local constant: `total` is the reference acreage
   // the saturation percentage was measured against, and is null until loaded.
-  const [capacity, setCapacity] = useState({ filled: null, total: null, percentage: null, basis: null });
+  // `season`/`seasonFallback` carry the cycle the figure was actually measured
+  // over, so this widget can never disagree with the Insights dropdown.
+  const [capacity, setCapacity] = useState({ filled: null, total: null, percentage: null, basis: null, season: null, seasonFallback: false });
   const [computedData, setComputedData] = useState([]);
 
   const trend = forecastView.trend;
@@ -225,22 +228,31 @@ export default function TerminalView() {
         setForecastView(deriveForecastView(null));
       });
 
-    fetchJson(apiUrl(`/saturation/${encodeURIComponent(selectedMarket)}/${encodeURIComponent(selectedCrop)}`), { signal: ctrl.signal })
+    // Sent with the season the dashboard is showing: an omitted season let the
+    // backend answer for a cycle with no declarations at all, and this widget
+    // rendered that as a reassuring 0%.
+    const season = derive_current_season();
+    fetchJson(apiUrl(`/saturation/${encodeURIComponent(selectedMarket)}/${encodeURIComponent(selectedCrop)}?season=${encodeURIComponent(season)}`), { signal: ctrl.signal })
       .then(data => {
         // The backend already computed saturation against a documented reference
         // area. Dividing by a hardcoded 175 here produced a second, invented
         // percentage that matched nothing the bot or API reported.
         setCapacity({
+          // No declarations is not "0% saturated" — 0% reads as an available
+          // measurement, so an explicit no-declarations answer nulls the figure.
           filled: Number.isFinite(data.total_area) ? data.total_area : null,
           total: Number.isFinite(data.reference_area_acres) ? data.reference_area_acres : null,
-          percentage: Number.isFinite(data.saturation_pct) ? Math.round(data.saturation_pct) : null,
+          percentage: Number.isFinite(data.saturation_pct) && data.has_declarations !== false
+            ? Math.round(data.saturation_pct) : null,
           basis: data.reference_basis ?? null,
+          season: data.season ?? season,
+          seasonFallback: data.season_match === 'latest_available',
         });
       })
       .catch(err => {
         if (cancelled) return;
         console.error("Error loading saturation metrics", err);
-        setCapacity({ filled: null, total: null, percentage: null, basis: null });
+        setCapacity({ filled: null, total: null, percentage: null, basis: null, season: null, seasonFallback: false });
       });
 
     return () => { cancelled = true; ctrl.abort(); };
@@ -273,6 +285,9 @@ export default function TerminalView() {
     () => getTheme(cropMeta.crop_mape_pct, isSimulated),
     [cropMeta.crop_mape_pct, isSimulated]
   );
+
+  // Detect dark mode from the html element class — same mechanism as Layout.jsx.
+  const isDark = typeof document !== 'undefined' && document.documentElement.classList.contains('dark');
 
   const banner = useMemo(() => {
     const b = feedBanner(forecastView, {
@@ -315,7 +330,7 @@ export default function TerminalView() {
       </div>
 
       {(anomalyMeta.is_anomaly || Math.abs(envDeviation) >= 30) && forecastView.hasForecast && (
-        <div className="bg-amber-500/10 border border-amber-500/30 text-amber-800 dark:text-amber-300 px-4 py-3 rounded-2xl flex items-center justify-between shadow-sm animate-fade-in">
+        <div role="alert" className="bg-amber-500/10 border border-amber-500/30 text-amber-800 dark:text-amber-300 px-4 py-3 rounded-2xl flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 shadow-sm animate-fade-in">
           <div className="flex items-center gap-2.5 text-xs font-bold font-mono">
             <ShieldAlert className="w-4 h-4 text-amber-600 dark:text-amber-400 shrink-0" />
             <span>
@@ -323,7 +338,7 @@ export default function TerminalView() {
               {anomalyMeta.threshold_pct != null && `Exceeds the ${anomalyMeta.threshold_pct}% crop-aware gate — the model's own benchmark error for this crop.`}
             </span>
           </div>
-          <span className="text-[9px] font-bold uppercase tracking-wider px-2 py-1 rounded bg-amber-500/20 text-amber-900 dark:text-amber-200 border border-amber-500/30">
+          <span className="text-[9px] font-bold uppercase tracking-wider px-2 py-1 rounded bg-amber-500/20 text-amber-900 dark:text-amber-200 border border-amber-500/30 shrink-0">
             Human-in-the-Loop Validation Active
           </span>
         </div>
@@ -333,27 +348,36 @@ export default function TerminalView() {
       <Card className="flex flex-col md:flex-row justify-between items-start md:items-center gap-4">
         <div className="flex flex-col sm:flex-row items-start sm:items-center gap-4 flex-1">
           <div className="flex items-center gap-2">
-            <span className="text-[10px] font-bold text-slate-700 dark:text-slate-400 uppercase tracking-widest">Crop:</span>
-            <select value={selectedCrop} onChange={(e) => setSelectedCrop(e.target.value)}
-              className="bg-white border border-slate-200 px-3 py-1.5 text-xs font-bold text-slate-800 focus:outline-none focus:border-emerald-500 rounded-xl cursor-pointer dark:bg-slate-900/60 dark:border-white/10 dark:text-slate-200">
+            <label htmlFor="crop-select" className="text-[10px] font-bold text-slate-700 dark:text-slate-400 uppercase tracking-widest">Crop:</label>
+            <select id="crop-select" value={selectedCrop} onChange={(e) => setSelectedCrop(e.target.value)}
+              className="bg-white border border-slate-200 px-3 py-1.5 text-xs font-bold text-slate-800 focus:outline-none focus:border-emerald-500 focus:ring-2 focus:ring-emerald-500/40 rounded-xl cursor-pointer dark:bg-slate-900/60 dark:border-white/10 dark:text-slate-200">
               {cropsList.map(c => <option key={c} value={c}>{c.toUpperCase()}</option>)}
             </select>
           </div>
 
           <div className="flex items-center gap-2">
-            <span className="text-[10px] font-bold text-slate-700 dark:text-slate-400 uppercase tracking-widest">Market:</span>
-            <select value={selectedMarket} onChange={(e) => setSelectedMarket(e.target.value)}
-              className="bg-white border border-slate-200 px-3 py-1.5 text-xs font-bold text-slate-800 focus:outline-none focus:border-emerald-500 rounded-xl cursor-pointer dark:bg-slate-900/60 dark:border-white/10 dark:text-slate-200">
+            <label htmlFor="market-select" className="text-[10px] font-bold text-slate-700 dark:text-slate-400 uppercase tracking-widest">Market:</label>
+            <select id="market-select" value={selectedMarket} onChange={(e) => setSelectedMarket(e.target.value)}
+              className="bg-white border border-slate-200 px-3 py-1.5 text-xs font-bold text-slate-800 focus:outline-none focus:border-emerald-500 focus:ring-2 focus:ring-emerald-500/40 rounded-xl cursor-pointer dark:bg-slate-900/60 dark:border-white/10 dark:text-slate-200">
               {marketsList.map(m => <option key={m} value={m}>{m}</option>)}
             </select>
           </div>
 
           <div className="flex items-center gap-2">
-            <TrendingDown className={`h-4 w-4 ${trend === 'BEARISH' ? 'text-red-500' : 'text-emerald-500'}`} />
+            <TrendingDown className={`h-4 w-4 ${
+              !forecastView.hasForecast ? 'text-slate-400 dark:text-slate-500' :
+              trend === 'BEARISH' ? 'text-red-500' : 'text-emerald-500'
+            }`} />
             <span className="text-xs font-bold text-slate-700 dark:text-slate-400 uppercase tracking-wider">Model:</span>
-            <span className={`text-xs font-mono font-bold uppercase tracking-wider ${
-              trend === 'BEARISH' ? 'text-red-600 dark:text-red-400' : trend === 'BULLISH' ? 'text-emerald-600 dark:text-emerald-500' : 'text-amber-650 dark:text-amber-400'
-            }`}>{trend} SIGNAL</span>
+            {forecastView.state === 'loading' ? (
+              <span className="text-xs font-mono font-bold uppercase tracking-wider text-slate-400 dark:text-slate-500 animate-pulse">LOADING…</span>
+            ) : forecastView.hasForecast ? (
+              <span className={`text-xs font-mono font-bold uppercase tracking-wider ${
+                trend === 'BEARISH' ? 'text-red-600 dark:text-red-400' : trend === 'BULLISH' ? 'text-emerald-600 dark:text-emerald-500' : 'text-amber-600 dark:text-amber-400'
+              }`}>{trend} SIGNAL</span>
+            ) : (
+              <span className="text-xs font-mono font-bold uppercase tracking-wider text-slate-400 dark:text-slate-500">NO SIGNAL</span>
+            )}
           </div>
         </div>
 
@@ -365,7 +389,7 @@ export default function TerminalView() {
 
       {/* Grid canvas */}
       <div className="grid grid-cols-1 lg:grid-cols-10 gap-6">
-        <Card className={`${isAdmin ? 'lg:col-span-7' : 'lg:col-span-10'} flex flex-col h-[440px]`}>
+        <Card className={`${isAdmin ? 'lg:col-span-7' : 'lg:col-span-10'} flex flex-col ${computedData.length === 0 ? '' : 'h-[440px]'}`}>
           <div className="flex justify-between items-center border-b border-slate-100 dark:border-white/5 pb-3 mb-2">
             <h3 className="text-xs font-bold uppercase tracking-wider text-slate-800 dark:text-white flex items-center gap-1.5">
               <Layers className="h-4 w-4 text-emerald-500" /> Live Mandi Spline Forecast &amp; Risk Bounds
@@ -435,27 +459,36 @@ export default function TerminalView() {
 
           <div className="flex-1 w-full font-mono text-[10px]" style={{height: 'calc(100% - 60px)'}}>
             {computedData.length === 0 ? (
-              <div className="h-full flex flex-col items-center justify-center gap-2 text-center px-6">
-                <span className="text-[11px] font-bold uppercase tracking-widest text-slate-600 dark:text-slate-300">
-                  No verified records for {selectedCrop} in {selectedMarket}
-                </span>
-                <span className="text-[10px] leading-relaxed text-slate-500 dark:text-slate-400 max-w-sm">
-                  The chart and forecast stay empty instead of showing estimated prices.
-                  Real rows appear here as soon as the AGMARKNET feed carries this market.
-                </span>
+              <div className="flex flex-col items-center justify-center gap-3 text-center py-10 px-6">
+                <div className="w-12 h-12 rounded-2xl bg-slate-100 dark:bg-white/5 flex items-center justify-center">
+                  <Layers className="h-6 w-6 text-slate-400" />
+                </div>
+                <div>
+                  <p className="text-sm font-bold text-slate-700 dark:text-slate-300 mb-1">
+                    No AGMARKNET records for {selectedCrop} in {selectedMarket}
+                  </p>
+                  <p className="text-xs text-slate-500 dark:text-slate-400 max-w-xs leading-relaxed">
+                    Verified mandi price data has not been published for this combination yet.
+                    Try selecting a different crop or market above.
+                  </p>
+                </div>
               </div>
             ) : (
             <ResponsiveContainer width="100%" height="100%">
               <ComposedChart data={computedData} margin={{ top: 12, right: 16, left: -25, bottom: 0 }}>
                 <defs />
 
-                <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="rgba(100,116,139,0.12)" />
+                <CartesianGrid strokeDasharray="3 3" vertical={false} stroke={isDark ? 'rgba(100,116,139,0.12)' : 'rgba(226,232,240,0.7)'} />
                 <XAxis dataKey="day" stroke="#94a3b8" axisLine={false} tickLine={false} tick={{ fontSize: 9, fontFamily: 'monospace', fontWeight: 600 }} />
                 <YAxis stroke="#94a3b8" axisLine={false} tickLine={false} domain={['dataMin - 200', 'dataMax + 200']} tick={{ fontSize: 9, fontFamily: 'monospace' }} />
 
                 <Tooltip
-                  contentStyle={{ backgroundColor: 'rgba(15,23,42,0.92)', border: '1px solid rgba(255,255,255,0.08)', color: '#e2e8f0', borderRadius: '12px', boxShadow: '0 20px 40px -8px rgba(0,0,0,0.4)', fontSize: 11, backdropFilter: 'blur(12px)' }}
-                  labelStyle={{ fontWeight: 800, fontFamily: 'monospace', color: '#f8fafc', marginBottom: 6, fontSize: 12 }}
+                  contentStyle={isDark
+                    ? { backgroundColor: 'rgba(15,23,42,0.95)', border: '1px solid rgba(255,255,255,0.08)', color: '#e2e8f0', borderRadius: '12px', boxShadow: '0 20px 40px -8px rgba(0,0,0,0.4)', fontSize: 11, backdropFilter: 'blur(12px)' }
+                    : { backgroundColor: 'rgba(255,255,255,0.97)', border: '1px solid rgba(226,232,240,0.9)', color: '#0f172a', borderRadius: '12px', boxShadow: '0 8px 24px -4px rgba(0,0,0,0.12)', fontSize: 11, backdropFilter: 'blur(8px)' }}
+                  labelStyle={isDark
+                    ? { fontWeight: 800, fontFamily: 'monospace', color: '#f8fafc', marginBottom: 6, fontSize: 12 }
+                    : { fontWeight: 800, fontFamily: 'monospace', color: '#0f172a', marginBottom: 6, fontSize: 12 }}
                   itemStyle={{ fontFamily: 'monospace', padding: '1px 0' }}
                   cursor={{ stroke: 'rgba(148,163,184,0.3)', strokeWidth: 1, strokeDasharray: '4 4' }}
                   formatter={(value, name) => {
@@ -574,13 +607,21 @@ export default function TerminalView() {
         <Card className="space-y-4">
           <div className="flex justify-between items-center">
             <h4 className="text-xs font-bold uppercase tracking-wider text-slate-700 dark:text-slate-400">Declared Acreage vs Reference Area</h4>
-            <span className="font-mono text-[10px] font-bold bg-emerald-50 text-emerald-600 border border-emerald-250 dark:bg-emerald-500/10 dark:border-emerald-500/20 dark:text-emerald-500 px-2 py-0.5 rounded">
-              {capacity.percentage == null ? '—% Saturated' : `${capacity.percentage}% Saturated`}
+            <span className={`font-mono text-[10px] font-bold px-2 py-0.5 rounded ${
+              capacity.percentage == null
+                ? 'bg-slate-100 text-slate-500 border border-slate-200 dark:bg-slate-500/10 dark:border-white/10 dark:text-slate-400'
+                : 'bg-emerald-50 text-emerald-600 border border-emerald-250 dark:bg-emerald-500/10 dark:border-emerald-500/20 dark:text-emerald-500'
+            }`}>
+              {capacity.percentage == null ? 'NO DECLARATIONS' : `${capacity.percentage}% Saturated`}
             </span>
           </div>
           <div className="space-y-2">
             <div className="flex justify-between text-xs font-bold">
-              <span className="text-slate-800 dark:text-slate-300">{selectedMarket} declarations</span>
+              <span className="text-slate-800 dark:text-slate-300">
+                {selectedMarket} declarations
+                {capacity.season ? ` · ${capacity.season}` : ''}
+                {capacity.seasonFallback ? ' (latest cycle with data)' : ''}
+              </span>
               <span className="font-mono text-slate-600 dark:text-slate-500">
                 {capacity.filled == null ? '—' : capacity.filled.toFixed(1)}
                 {' / '}
@@ -588,9 +629,17 @@ export default function TerminalView() {
                 {' Acres'}
               </span>
             </div>
-            <div className="w-full h-3 bg-slate-100 border border-slate-200 dark:bg-slate-950/20 dark:border-white/5 rounded-lg overflow-hidden">
-              <div className="h-full bg-gradient-to-r from-emerald-500 to-teal-500 transition-all duration-500" style={{ width: `${capacity.percentage == null ? 0 : Math.max(capacity.percentage, 2)}%` }} />
-            </div>
+            {capacity.percentage == null ? (
+              <div className="w-full h-3 flex items-center">
+                <span className="text-[10px] font-mono font-bold text-slate-400 dark:text-slate-500 uppercase tracking-wider">
+                  No declarations — saturation not measurable
+                </span>
+              </div>
+            ) : (
+              <div className="w-full h-3 bg-slate-100 border border-slate-200 dark:bg-slate-950/20 dark:border-white/5 rounded-lg overflow-hidden">
+                <div className="h-full bg-gradient-to-r from-emerald-500 to-teal-500 transition-all duration-500" style={{ width: `${Math.max(capacity.percentage, 2)}%` }} />
+              </div>
+            )}
             {capacity.basis === 'state_average_fallback' && (
               <p className="text-[9px] font-mono text-amber-600 dark:text-amber-400 uppercase tracking-wider">
                 Reference is a state average — no district/crop figure on record

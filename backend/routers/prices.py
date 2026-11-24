@@ -32,7 +32,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from backend.core.config import settings
 from backend.core.database import get_db
 from backend.core.models import MandiPrice
-from backend.services import price_service
+from backend.services import ml_service, price_service
 
 router = APIRouter(prefix="/prices", tags=["prices"])
 
@@ -124,6 +124,39 @@ def _predict_response(res: dict) -> dict:
         shape["message"] = (
             "No mandi record found in the database for this crop and market, so "
             "there is no price to forecast from."
+        )
+    elif res["type"] == "unsupported_vocabulary":
+        # A commodity or mandi the model was never trained on. Naming the axis
+        # and the size of the trained vocabulary lets the operator pick a
+        # supported pair instead of reading a null as "the market looks flat".
+        missing = res.get("missing_axes") or []
+        shape["missing_axes"] = missing
+        axis_text = " and ".join(missing) if missing else "pair"
+        shape["message"] = (
+            f"No forecast: {axis_text} is outside the model's training "
+            f"vocabulary ({ml_service.vocab_size('commodity')} commodities x "
+            f"{ml_service.vocab_size('market')} mandis). A label encoder has no "
+            "unseen category, so any number returned here would be the model "
+            "answering about a different crop or market."
+        )
+    elif res["type"] == "model_validation_warning":
+        # The model answered, but its own history contradicts the answer. Show
+        # the disagreement instead of the estimate.
+        shape["model_raw_forecast"] = res.get("model_raw_forecast")
+        shape["historical_min"] = res.get("historical_min")
+        shape["historical_max"] = res.get("historical_max")
+        shape["historical_mean"] = res.get("historical_mean")
+        shape["historical_stddev"] = res.get("historical_stddev")
+        shape["historical_records"] = res.get("historical_records")
+        shape["defensible_low"] = res.get("defensible_low")
+        shape["defensible_high"] = res.get("defensible_high")
+        shape["message"] = (
+            f"Model validation warning: the raw estimate "
+            f"({res.get('model_raw_forecast')}) falls outside the defensible range "
+            f"{res.get('defensible_low')}-{res.get('defensible_high')} derived from "
+            f"{res.get('historical_records')} verified records for this mandi "
+            f"(observed {res.get('historical_min')}-{res.get('historical_max')}). "
+            "No forecast or buy/sell signal is published."
         )
     elif res["type"] == "error":
         shape["message"] = res.get("detail")

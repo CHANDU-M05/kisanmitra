@@ -140,6 +140,46 @@ export function deriveForecastView(pred) {
     };
   }
 
+  if (pred.type === 'unsupported_vocabulary') {
+    return {
+      state: FEED_STATE.NO_DATA, ...NO_FORECAST,
+      // Which absence this is: NO_DATA also covers "no mandi record", and the
+      // two need opposite explanations on screen.
+      refusal: 'not_in_training_set',
+      cropMeta: { crop_mape_pct: null, msp_floor: null, msp_ratio: null },
+      anomaly: { ...NO_ANOMALY },
+      recommendation: 'CROP/MANDI NOT IN MODEL TRAINING SET — NO FORECAST',
+      provenance,
+    };
+  }
+
+  if (pred.type === 'model_validation_warning') {
+    // The model answered and its own history contradicts the answer. Show the
+    // disagreement rather than the estimate it produced.
+    return {
+      state: FEED_STATE.ERROR, ...NO_FORECAST,
+      // Not a service outage: the service answered, and its own history is what
+      // rejected the answer. ERROR also covers "try again shortly", so the
+      // banner has to be able to tell the two apart.
+      refusal: 'failed_historical_check',
+      cropMeta: {
+        crop_mape_pct: pred.crop_mape_pct ?? null,
+        msp_floor: null, msp_ratio: null,
+      },
+      anomaly: { ...NO_ANOMALY },
+      recommendation: 'MODEL FAILS HISTORICAL SANITY CHECK — NO FORECAST',
+      validation: {
+        model_raw_forecast: pred.model_raw_forecast ?? null,
+        historical_min: pred.historical_min ?? null,
+        historical_max: pred.historical_max ?? null,
+        defensible_low: pred.defensible_low ?? null,
+        defensible_high: pred.defensible_high ?? null,
+        historical_records: pred.historical_records ?? null,
+      },
+      provenance,
+    };
+  }
+
   return {
     state: FEED_STATE.ERROR, ...NO_FORECAST,
     cropMeta: { crop_mape_pct: null, msp_floor: null, msp_ratio: null },
@@ -163,11 +203,27 @@ export function feedBanner(view, { crop, market, isSimulated, scenarioName }) {
           + (p.stale_reason === 'upstream_not_published' ? ' (NOTHING PUBLISHED YET)' : ''),
       };
     case FEED_STATE.NO_DATA:
+      if (view.refusal === 'not_in_training_set') {
+        // There IS a verified mandi price on this screen — what is missing is
+        // training coverage. "No mandi record" would contradict the number the
+        // reader can see two rows above it.
+        return {
+          tone: 'unavailable',
+          text: `NO FORECAST — ${String(crop).toUpperCase()} AT ${String(market).toUpperCase()} `
+            + 'IS NOT IN THE MODEL\'S TRAINED VOCABULARY',
+        };
+      }
       return {
         tone: 'unavailable',
         text: `NO MANDI RECORD FOR ${String(crop).toUpperCase()} IN ${String(market).toUpperCase()}`,
       };
     case FEED_STATE.ERROR:
+      if (view.refusal === 'failed_historical_check') {
+        return {
+          tone: 'unavailable',
+          text: 'NO FORECAST — MODEL ESTIMATE CONTRADICTS THIS MANDI\'S OWN HISTORY',
+        };
+      }
       return { tone: 'unavailable', text: 'FORECAST SERVICE UNAVAILABLE — TRY AGAIN SHORTLY' };
     case FEED_STATE.LOADING:
       return { tone: 'muted', text: 'LOADING VERIFIED MANDI DATA…' };

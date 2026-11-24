@@ -18,12 +18,18 @@ from sqlalchemy.orm import sessionmaker
 
 from backend.core.config import settings
 from backend.core.models import CropDeclaration
+from conftest import requires_db
 import importlib
 
 init_db_module = importlib.import_module("scripts.00_init_db")
 init_db = init_db_module.init_db
 
 
+# Runs for real wherever PostgreSQL is reachable — which CI always provides via
+# its service container. On a checkout with no database it skips with the same
+# documented reason its sibling integration files already use, instead of
+# failing on a connection error that has nothing to do with the code under test.
+@requires_db
 @pytest.mark.asyncio
 async def test_live_postgres_upsert_and_unique_index():
     """

@@ -23,7 +23,7 @@ async def login_for_access_token(
     db: AsyncSession = Depends(get_db)
 ):
     username = form_data.username.strip().lower() if form_data.username else ""
-    now = datetime.datetime.utcnow()
+    now = datetime.datetime.now(datetime.timezone.utc)
     
     # Check if account is locked out
     if username in _FAILED_LOGIN_ATTEMPTS:
@@ -111,7 +111,7 @@ async def get_current_user(
 
 async def prune_expired_tokens(db: AsyncSession):
     try:
-        await db.execute(delete(RevokedToken).where(RevokedToken.expires_at < datetime.datetime.utcnow()))
+        await db.execute(delete(RevokedToken).where(RevokedToken.expires_at < datetime.datetime.now(datetime.timezone.utc)))
         await db.commit()
     except Exception as e:
         import logging
@@ -125,7 +125,7 @@ async def logout(
 ):
     jti = current_user.jti
     exp_timestamp = current_user.exp
-    expires_at = datetime.datetime.utcfromtimestamp(exp_timestamp)
+    expires_at = datetime.datetime.fromtimestamp(exp_timestamp, tz=datetime.timezone.utc)
     
     revoked_token = RevokedToken(jti=jti, expires_at=expires_at)
     db.add(revoked_token)

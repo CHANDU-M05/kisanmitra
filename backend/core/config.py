@@ -106,6 +106,8 @@ class Settings(BaseSettings):
     whatsapp_phone_number_id: str = ""
     whatsapp_verify_token: str = ""
     whatsapp_app_secret: str = ""
+    telegram_bot_token: SecretStr = SecretStr("")
+    telegram_webhook_secret: str = ""
     data_gov_api_key: str = ""
 
     # ── App ───────────────────────────────────────────────
@@ -137,6 +139,21 @@ class Settings(BaseSettings):
     # older than this many days is reported as stale instead of being forecast
     # from and labelled as today's price.
     price_max_age_days: int = 3
+    # How old the cached freshness snapshot (backend/services/freshness.py) may
+    # get before /health stops trusting it and reports UNAVAILABLE. Reads never
+    # query the database, so this is the guard against a dead scheduler quietly
+    # serving an ancient FRESH verdict. Default = 12h = two refresh intervals:
+    # a scheduler on its normal cadence never expires the cache; a process
+    # whose refresh loop died reports "unknown" within two ticks rather than
+    # forever. Read-only degradation — expiring the cache triggers no query.
+    freshness_cache_ttl_seconds: int = 43200
+    # How often the independent freshness monitor (scheduler.
+    # freshness_monitor_loop) re-reads feed freshness into the cache. It runs
+    # regardless of REFRESH_ENABLED — a deployment whose ingestion is owned by
+    # an external timer still needs its own /health to track reality — and is
+    # strictly read-only. 300s = three cheap aggregates every 5 minutes: an
+    # outage or recovery becomes visible to health within one interval.
+    freshness_check_interval_seconds: int = Field(300, ge=5)
 
     # ── AGMARKNET refresh ───────────────────────────────────
     # Scheduled incremental ingest, so the freshness SLA above is actually

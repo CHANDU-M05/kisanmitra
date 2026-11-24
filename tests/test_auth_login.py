@@ -127,7 +127,7 @@ def test_correct_creds_succeed_after_lockout_expires(client):
         _login(client, "admin", password="bad")
     assert _login(client, "admin").status_code == 429
     # Simulate the 15-minute window elapsing: backdate the lockout expiry.
-    past = datetime.datetime.utcnow() - datetime.timedelta(minutes=1)
+    past = datetime.datetime.now(datetime.timezone.utc) - datetime.timedelta(minutes=1)
     auth_module._FAILED_LOGIN_ATTEMPTS["admin"] = (3, past)
     res = _login(client, "admin")
     assert res.status_code == 200

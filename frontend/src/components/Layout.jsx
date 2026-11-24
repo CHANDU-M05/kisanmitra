@@ -4,7 +4,7 @@ import { NavLink, Outlet, useNavigate, useLocation } from 'react-router-dom';
 import { Search, Terminal, BarChart2, Users, Settings, MessageSquare, LogOut, CloudRain, Sparkles, ClipboardList, Menu, X, Sun, Moon, Languages, HelpCircle, Calendar, Download, Clock } from 'lucide-react';
 import { Toaster } from 'react-hot-toast';
 import { useTranslation } from 'react-i18next';
-import { API } from '../config';
+import { API, derive_current_season } from '../config';
 import { fetchJson, cachedGet, apiUrl } from '../api';
 import CropCalendarModal from './CropCalendarModal';
 
@@ -123,13 +123,22 @@ export default function Layout() {
       })
       .catch(err => console.error("Error loading declarations summary", err));
 
-    fetchJson(apiUrl('/saturation/Kolar/Tomato'), { signal: ctrl.signal })
+    // Omitting the season let the backend fall back to its own derived default,
+    // so the header chip and the Saturation screen could report different
+    // numbers for the same district/crop. Send the season the rest of the
+    // dashboard uses and label the chip by the season the answer describes.
+    const season = derive_current_season();
+    fetchJson(apiUrl(`/saturation/Kolar/Tomato?season=${encodeURIComponent(season)}`), { signal: ctrl.signal })
       .then(data => {
         // Report the backend's own figure. This used to divide by a hardcoded
         // 175-acre "hub capacity" that no endpoint, model or bot recognises, so
         // the header disagreed with every other saturation number on screen.
+        // A pair with no declarations is reported as NO DATA rather than as a
+        // reassuring 0%, because 0% means "measured, not saturated" and the
+        // first case has not been measured at all.
         setKolarSaturation(
-          Number.isFinite(data.saturation_pct) ? `${Math.round(data.saturation_pct)}%` : 'NO DATA'
+          Number.isFinite(data.saturation_pct) && data.has_declarations !== false
+            ? `${Math.round(data.saturation_pct)}%` : 'NO DATA'
         );
       })
       .catch(err => {
@@ -517,8 +526,9 @@ export default function Layout() {
             {/* Theme Toggle */}
             <button
               onClick={() => setDarkMode(!darkMode)}
-              className="p-1.5 rounded-lg border border-slate-200 text-slate-500 hover:bg-slate-50 transition-colors"
+              className="p-1.5 rounded-lg border border-slate-200 text-slate-500 hover:bg-slate-50 transition-colors focus:outline-none focus:ring-2 focus:ring-emerald-500/40"
               title="Toggle Theme"
+              aria-label={darkMode ? "Switch to light mode" : "Switch to dark mode"}
             >
               {darkMode ? <Sun className="h-4 w-4 text-orange-400" /> : <Moon className="h-4 w-4 text-slate-700" />}
             </button>

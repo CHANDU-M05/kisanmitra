@@ -10,15 +10,18 @@ It is responsible for:
 """
 import asyncio
 import logging
+import time
 from contextlib import asynccontextmanager
+from datetime import datetime, timezone
 from typing import AsyncGenerator
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from backend.core.database import engine, ensure_database_reachable
+from backend.core.database import AsyncSessionLocal, engine, ensure_database_reachable
 from backend.routers import api_router
 from backend.services import ml_service, scheduler
+from backend.services.freshness import FRESHNESS, FreshnessSnapshot, FreshnessState
 
 # ── Logging ───────────────────────────────────────────────
 from backend.core.logging_config import setup_kisanmitra_logging
@@ -36,8 +39,35 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     # /predict answers 503 until they finish — a cold start is degraded, not
     # down.
     async def _bootstrap_database() -> None:
+        # An observation is ordered by when it BEGAN, not when it finished, so
+        # the stamp is taken before the awaited reachability check -- which
+        # spans the whole retry/backoff window (database.ensure_database_reachable).
+        # Stamping the later write moment instead would let this marker unfairly
+        # outrank a concurrent observation that started mid-retry and succeeded:
+        # bootstrap starts at T0, a concurrent check starts at T1 > T0 and lands
+        # FRESH, bootstrap's retries finally fail at T2 > T1, and a T2 stamp would
+        # overwrite that newer-but-effectively-older observation. Reused only by
+        # the failed branch below; the healthy branch re-stamps via refresh().
+        t_start = time.monotonic()
         if not await ensure_database_reachable():
             logger.warning("Database not reachable at startup; will retry on demand.")
+            # Record WHY, and record it with the real ordering stamp captured
+            # above -- the start of this failed reachability observation, never
+            # the write moment. Stamping it at all keeps it from being a
+            # loophole: an untimestamped marker would let a stalled older
+            # success (one that started before the database actually dropped)
+            # land later, erase the newer failure's ordering, and restore a
+            # false FRESH + database_connected=true. The never-computed initial
+            # cache snapshot deliberately stays untimestamped because nothing
+            # can predate module import; this marker can and does overlap
+            # concurrent freshness checks, so it must order against them.
+            FRESHNESS.set(FreshnessSnapshot(
+                state=FreshnessState.UNAVAILABLE,
+                detail="startup could not reach the database; no freshness check ran",
+                db_reachable=False,
+                checked_at=t_start,
+                checked_at_wall=datetime.now(timezone.utc),
+            ))
             return
         try:
             import importlib
@@ -46,6 +76,15 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
             logger.info("Database schema and idempotency indexes verified ✓")
         except Exception as e:
             logger.error(f"Database initialization warning: {e}")
+        # Warm the shared freshness snapshot once at startup (read-only, two
+        # aggregates) so /health has a real verdict to serve before the first
+        # scheduler tick. Failure here stores an UNAVAILABLE snapshot — the
+        # cache contract lives in backend/services/freshness.py.
+        try:
+            snap = await FRESHNESS.refresh(AsyncSessionLocal)
+            logger.info("Startup freshness snapshot: %s", snap.state.value)
+        except Exception as e:  # noqa: BLE001 — warm-up must not block serving
+            logger.error("Freshness warm-up failed (health will report unavailable): %s", e)
 
     async def _bootstrap_model() -> None:
         loop = asyncio.get_running_loop()
@@ -65,6 +104,9 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     # meaningful if something keeps the feed current, so it starts with the app
     # and is cancelled (not abandoned) on shutdown.
     refresh_task = scheduler.start_refresh_task()
+    # Read-only freshness monitor: keeps /health's cached snapshot honest
+    # whether or not this process owns ingestion (REFRESH_ENABLED=false).
+    monitor_task = scheduler.start_freshness_monitor()
 
     yield
 
@@ -72,7 +114,13 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     for task in warmup_tasks:
         if not task.done():
             task.cancel()
+    await scheduler.stop_freshness_monitor(monitor_task)
     await scheduler.stop_refresh_task(refresh_task)
+    try:
+        from backend.routers.telegram_webhook import close_telegram_components
+        await close_telegram_components()
+    except Exception as e:
+        logger.warning(f"Error shutting down Telegram components: {e}")
     await engine.dispose()
 
 

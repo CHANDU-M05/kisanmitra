@@ -152,10 +152,13 @@ async def test_health_read_scrubs_rows_written_before_the_fix(fake_key):
     legacy.error = f"network error fetching Tomato: {URL_WITH_KEY}"
 
     db = MagicMock()
+    # Order of compute_freshness's aggregates, then the last-refresh lookup:
+    # newest market date, price row count, declaration count, last run.
     db.execute = AsyncMock(side_effect=[
         _res(scalar_one=datetime.datetime(2026, 8, 25)),   # newest market date
+        _res(scalar=25000),                                # price row count
+        _res(scalar=7),                                    # declaration count
         _res(scalar_one=legacy),                           # last refresh run
-        _res(scalar=25000),                                # row count
     ])
 
     health = await data_refresh.data_freshness(db, today=datetime.date(2026, 10, 15))

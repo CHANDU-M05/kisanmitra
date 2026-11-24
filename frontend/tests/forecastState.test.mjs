@@ -168,3 +168,77 @@ test('the dashboard no longer divides acreage by an invented capacity', () => {
     assert.match(load(file), /saturation_pct/, `${file} must use the backend's saturation figure`);
   }
 });
+
+// ── Refusals produced by the real backend gates ─────────────────────────────
+// Captured verbatim from the local API (backend/services/price_service.py
+//::_predict_tail) against the loaded model and the real mandi history. Neither
+// response is a forecast, so the screen must render no number for either.
+
+// GET /prices/predict?commodity=Capsicum&market=Ramanagara%20APMC
+const UNSUPPORTED_VOCABULARY = {
+  commodity: 'Capsicum', market: 'Ramanagara APMC', district: 'Bengaluru South',
+  type: 'unsupported_vocabulary', current_price: 5200.0,
+  price_as_of: '2026-11-01', days_old: 2, data_source: 'market',
+  source_market: 'Ramanagara APMC', data_quality: ['arrivals_unknown'],
+  arrivals_tonnes: 0.0, arrivals_provenance: 'unknown',
+  price_provenance: 'verified_mandi', crop_mape_pct: null,
+  predicted_price: null, confidence_low: null, confidence_high: null,
+  signal: null, missing_axes: ['commodity'],
+  message: "No forecast: commodity is outside the model's training vocabulary "
+    + '(6 commodities x 40 mandis). A label encoder has no unseen category, so '
+    + 'any number returned here would be the model answering about a different '
+    + 'crop or market.',
+};
+
+// GET /prices/predict?commodity=Ragi&market=Kottur%20APMC
+const VALIDATION_WARNING = {
+  commodity: 'Ragi', market: 'Kottur APMC', district: 'Vijayanagara',
+  type: 'model_validation_warning', current_price: 3649.0,
+  price_as_of: '2026-10-31', days_old: 3, data_source: 'market',
+  source_market: 'Kottur APMC', data_quality: ['arrivals_unknown'],
+  arrivals_tonnes: 0.0, arrivals_provenance: 'unknown',
+  price_provenance: 'verified_mandi', crop_mape_pct: 8.27,
+  predicted_price: null, confidence_low: null, confidence_high: null, signal: null,
+  model_raw_forecast: 2100.0, historical_min: 3518.0, historical_max: 3652.0,
+  defensible_low: 2924.0, defensible_high: 4246.0, historical_records: 6,
+};
+
+test('a crop outside the trained vocabulary yields no forecast, and says why', () => {
+  const view = deriveForecastView(UNSUPPORTED_VOCABULARY);
+  assert.equal(view.state, 'no_data');
+  assert.equal(view.hasForecast, false);
+  assert.equal(view.predicted, null);
+  assert.equal(view.low, null);
+  assert.equal(view.high, null);
+  assert.equal(view.signal, null);
+  assert.match(view.recommendation, /NOT IN MODEL TRAINING SET/);
+  // The spot price is still a fact and stays visible; only the estimate is gone.
+  assert.equal(view.provenance.price_as_of, '2026-11-01');
+  assert.match(view.provenance.message, /6 commodities x 40 mandis/);
+  // The banner must name the real absence, not claim there is no price record.
+  const banner = feedBanner(view, { crop: 'Capsicum', market: 'Ramanagara APMC' });
+  assert.match(banner.text, /TRAINED VOCABULARY/);
+  assert.doesNotMatch(banner.text, /NO MANDI RECORD/);
+});
+
+test('a forecast contradicted by its own mandi history is withheld', () => {
+  const view = deriveForecastView(VALIDATION_WARNING);
+  assert.equal(view.state, 'error');
+  assert.equal(view.hasForecast, false);
+  assert.equal(view.predicted, null);
+  assert.match(view.recommendation, /HISTORICAL SANITY CHECK/);
+  // The disagreement is disclosed, not hidden: Ragi at Kottur has only ever
+  // traded 3518-3652, and the model's raw 2100 is the misleading number the
+  // pre-fix code published as a confident "SELL NOW".
+  assert.equal(view.validation.model_raw_forecast, 2100.0);
+  assert.equal(view.validation.historical_min, 3518.0);
+  assert.equal(view.validation.historical_max, 3652.0);
+  assert.equal(view.validation.defensible_low, 2924.0);
+  assert.equal(view.validation.historical_records, 6);
+  assert.notEqual(view.trend, 'BEARISH', 'a withheld estimate must not become a signal');
+  // Withheld-for-cause is not a service outage — "try again shortly" would send
+  // the operator to reload a page that will answer the same way every time.
+  const banner = feedBanner(view, { crop: 'Ragi', market: 'Kottur APMC' });
+  assert.match(banner.text, /OWN HISTORY/);
+  assert.doesNotMatch(banner.text, /TRY AGAIN/);
+});

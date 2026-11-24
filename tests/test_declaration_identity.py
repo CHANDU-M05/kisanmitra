@@ -29,6 +29,11 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 from sqlalchemy.dialects import postgresql
 
+# Central DB gate: `@requires_db` marks the live-PostgreSQL tests below so the
+# conftest `pytest_runtest_setup` hook skips them when no database is reachable
+# and fails closed when the target is not a designated disposable *_test DB.
+from conftest import requires_db
+
 from backend.routers import conversation as conv
 
 
@@ -362,6 +367,7 @@ TEST_CROP, TEST_DISTRICT, TEST_SEASON = "TestSplitCrop", "TestSplitDistrict", "t
 
 
 @pytest.mark.asyncio
+@requires_db
 async def test_live_pg_migration_and_dual_uniqueness():
     """Applies the real migration DDL to the local PostgreSQL, proves BOTH the
     legacy phone unique index and the new partial sender index hold, then
@@ -376,12 +382,13 @@ async def test_live_pg_migration_and_dual_uniqueness():
     from scripts.tools.migrate_channel_sender_id import apply_migrations
 
     engine = create_async_engine(settings.database_url)
-    try:
-        async with engine.connect() as c:
-            await c.execute(sa_text("SELECT 1"))
-    except (OperationalError, Exception):
-        await engine.dispose()
-        pytest.skip("local PostgreSQL not reachable")
+    # Reachability and safety are decided centrally: conftest skips these tests
+    # when no disposable DB is authorized, and db_safety refuses an unauthorized
+    # target at the connection layer. Reaching the body means the target IS the
+    # approved disposable database, so a failed connect is a genuine outage and
+    # must surface as an error — never a silent skip that reads as green.
+    async with engine.connect() as c:
+        await c.execute(sa_text("SELECT 1"))
 
     Session = sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
     try:
@@ -448,6 +455,7 @@ CROP2, DIST2, SEASON2 = "TestConcCrop", "TestConcDistrict", "test_conc_2026"
 
 
 @pytest.mark.asyncio
+@requires_db
 async def test_live_pg_concurrent_duplicates_single_row():
     """Point 2 under real concurrency: two simultaneous raw INSERTs for the same
     (sender, crop, district, season) — exactly one survives; the app-style
@@ -465,12 +473,10 @@ async def test_live_pg_concurrent_duplicates_single_row():
     from scripts.tools.migrate_channel_sender_id import apply_migrations
 
     engine = create_async_engine(settings.database_url)
-    try:
-        async with engine.connect() as c:
-            await c.execute(sa_text("SELECT 1"))
-    except Exception:
-        await engine.dispose()
-        pytest.skip("local PostgreSQL not reachable")
+    # Reachability and safety are decided centrally (see conftest + db_safety);
+    # a failed connect here is a real outage, so let it surface as an error.
+    async with engine.connect() as c:
+        await c.execute(sa_text("SELECT 1"))
 
     Session = sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
     async with engine.begin() as conn:
@@ -532,6 +538,7 @@ COLLIDE_PHONE = "8990001112"
 
 
 @pytest.mark.asyncio
+@requires_db
 async def test_live_pg_rollback_collision_refusal():
     """Point 1 on real data: a web phone row and a phone-NULL sender row can
     legitimately coexist on the same crop/district/season (NULL never conflicts
@@ -546,12 +553,10 @@ async def test_live_pg_rollback_collision_refusal():
     from scripts.tools.migrate_channel_sender_id import apply_migrations, rollback_migrations
 
     engine = create_async_engine(settings.database_url)
-    try:
-        async with engine.connect() as c:
-            await c.execute(sa_text("SELECT 1"))
-    except Exception:
-        await engine.dispose()
-        pytest.skip("local PostgreSQL not reachable")
+    # Reachability and safety are decided centrally (see conftest + db_safety);
+    # a failed connect here is a real outage, so let it surface as an error.
+    async with engine.connect() as c:
+        await c.execute(sa_text("SELECT 1"))
 
     Session = sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
     async with engine.begin() as conn:

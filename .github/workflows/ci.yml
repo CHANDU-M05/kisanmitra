@@ -3,6 +3,10 @@ name: Continuous Integration
 on:
   pull_request:
     branches: [main]
+  push:
+    branches:
+      - release/candidate-v2.0.0
+      - release/production-deployment-pipeline
   workflow_call:
 
 permissions:
@@ -61,9 +65,20 @@ jobs:
       DB_USER: kisanmitra
       DB_PASSWORD: ci_password
       DB_NAME: kisanmitra_test
+      # Explicit disposable-test-DB designation for the conftest/db_safety guard.
+      # CI is the one place a DB-backed test may write: it names the exact throwaway
+      # database (KM_TEST_DB_NAME) and opts in (KM_TEST_DB_APPROVED) against a
+      # loopback service container. Without BOTH, the guard refuses the connection.
+      KM_TEST_DB_APPROVED: "1"
+      KM_TEST_DB_NAME: kisanmitra_test
       REDIS_URL: redis://localhost:6379/0
       CORS_ORIGINS: "http://localhost:3000"
       REFRESH_ENABLED: "false"
+      # The trained .pkl artifacts are not in git (.gitignore: data/models/*.pkl).
+      # Pointing MODEL_DIR at a directory that is never populated makes this
+      # job's mode explicit and reproducible: it runs the artifact-free suite,
+      # and the model-artifact-certification job runs the artifact-backed one.
+      MODEL_DIR: /tmp/kisanmitra-models-absent
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -82,11 +97,216 @@ jobs:
         run: psql -h localhost -U kisanmitra -d kisanmitra_test -c "CREATE EXTENSION IF NOT EXISTS vector;"
       - name: Lint — syntax errors and undefined names (critical only)
         run: ruff check backend/ --select E9,F63,F7,F82
-      - name: Run test suite
-        run: pytest -q
+      - name: Model-identity test inventory (they may be deferred, never hidden)
+        run: |
+          deferred=$(pytest --collect-only -q -m requires_served_model | grep -c '^tests/' || true)
+          selected=$(pytest --collect-only -q -m "not requires_served_model" | grep -c '^tests/' || true)
+          echo "artifact-free tests: $selected | model-identity tests: $deferred"
+          {
+            echo "### Backend suite mode"
+            echo
+            echo "Ran the **artifact-free** suite: $selected tests with no trained model required."
+            echo "**$deferred** model-identity tests are deferred to the model-artifact-certification job, which must pass for CI to be green."
+          } >> "$GITHUB_STEP_SUMMARY"
+          # Lower bound: the guards exist. Upper bound: nobody may widen the
+          # artifact-dependent set to make the ordinary suite cheaper to run.
+          if [ "$deferred" -lt 4 ] || [ "$deferred" -gt 8 ]; then
+            echo "::error::expected 4-8 requires_served_model tests, found $deferred. Either the model-identity guards were unmarked/renamed (CI would go green without certifying the model) or too many tests were moved behind the artifact requirement."
+            exit 1
+          fi
+      - name: Run test suite (artifact-free mode)
+        run: |
+          set -o pipefail
+          pytest -q -m "not requires_served_model" -rs | tee pytest-artifact-free.log
+          # This job provisions the PostgreSQL service AND explicitly authorizes
+          # the disposable kisanmitra_test DB (KM_TEST_DB_APPROVED/KM_TEST_DB_NAME),
+          # so a DB-backed test can no longer skip for "PostgreSQL not reachable".
+          # Any skip here means the database the job depends on was not actually
+          # exercised — the false green this gate exists to prevent. Zero tolerance.
+          if grep -q '^SKIPPED' pytest-artifact-free.log; then
+            echo "::error::a test skipped in CI despite the provisioned disposable database — coverage did not actually execute."
+            grep '^SKIPPED' pytest-artifact-free.log || true
+            exit 1
+          fi
+      - name: Integration test inventory (must match the manifest exactly)
+        run: |
+          set -o pipefail
+          pytest --collect-only -q -m integration_db | grep '^tests/' | sort > /tmp/collected_integration.txt
+          grep -vE '^[[:space:]]*(#|$)' tests/integration_manifest.txt | sort > /tmp/expected_integration.txt
+          echo "manifest expects: $(wc -l < /tmp/expected_integration.txt) | collected: $(wc -l < /tmp/collected_integration.txt)"
+          {
+            echo "### Integration test inventory"
+            echo
+            echo "Manifest: $(wc -l < /tmp/expected_integration.txt) DB-backed tests. Collected: $(wc -l < /tmp/collected_integration.txt)."
+          } >> "$GITHUB_STEP_SUMMARY"
+          # EXACT set match against tests/integration_manifest.txt. A DB test that
+          # is renamed, deleted, or loses its integration_db marker disappears from
+          # the collected set and fails here; a new one that is not declared also
+          # fails. Changing the inventory must be a deliberate manifest edit.
+          if ! diff -u /tmp/expected_integration.txt /tmp/collected_integration.txt; then
+            echo "::error::integration_db collection does not match tests/integration_manifest.txt — the inventory changed without a deliberate manifest update."
+            exit 1
+          fi
+      - name: Integration tests must execute (CI provides PostgreSQL)
+        run: |
+          set -o pipefail
+          mapfile -t km_tests < <(grep -vE '^[[:space:]]*(#|$)' tests/integration_manifest.txt)
+          pytest -q "${km_tests[@]}" -rs | tee integration.log
+          if grep -qE "no tests ran" integration.log; then
+            echo "::error::none of the manifest integration tests ran."
+            exit 1
+          fi
+          if grep -q '^SKIPPED' integration.log || grep -qE "[0-9]+ (skipped|failed|error)" integration.log; then
+            echo "::error::an expected integration test was skipped or did not pass against the disposable database."
+            tail -30 integration.log
+            exit 1
+          fi
+          passed=$(grep -oE "[0-9]+ passed" integration.log | grep -oE "[0-9]+" | head -1)
+          if [ "${passed:-0}" -ne "${#km_tests[@]}" ]; then
+            echo "::error::expected ${#km_tests[@]} integration tests to pass, saw ${passed:-0}."
+            exit 1
+          fi
       - name: Dependency vulnerability audit (advisory)
         continue-on-error: true
         run: pip-audit -r requirements.txt
+
+  # ── Served model artifact certification ──────────────────────────────────
+  # The honest half of the gate. The job above proves the suite is
+  # reproducible; this one proves the APPLICATION CAN OBTAIN AND LOAD ITS REAL
+  # TRAINED ARTIFACTS, through the same MODEL_URL + MODEL_SHA256 path the
+  # containers use, and then asserts facts about that artifact (algorithm,
+  # feature count, the MAPE the frontend shows, the fitted vocabulary).
+  #
+  # It FAILS when the source is not configured rather than skipping: a skipped
+  # job still reports green, and "green" must never mean "we could not get the
+  # model but did not look".
+  #
+  # One-time operator setup (see artifacts/phase0-master-audit-2026-11-03/
+  # MODEL_ARTIFACT_ARCHIVE_VERIFICATION.md and the publication record):
+  # build a DETERMINISTIC archive of the three served files, e.g.
+  #   cd data/models
+  #   LC_ALL=C TZ=UTC tar --sort=name --mtime='2026-11-03 00:00:00Z' \
+  #     --owner=0 --group=0 --numeric-owner --format=gnu \
+  #     -cf - price_model.pkl encoders.pkl model_metadata.json | gzip -n9 \
+  #     > kisanmitra-models-<date>.tar.gz
+  #   sha256sum kisanmitra-models-<date>.tar.gz
+  # (a plain `tar czf` is not reproducible: it embeds the packing mtime/uid and
+  # gzip's timestamp, so the same files yield a different digest each build).
+  # Publish the archive as a public HTTPS asset (a GitHub Release) and set the
+  # repository variables MODEL_ARTIFACT_URL and MODEL_ARTIFACT_SHA256. Both must
+  # describe the CURRENT artifacts: the pinned digest is checked before anything
+  # is unpickled, so stale or swapped material fails here instead of serving a
+  # model the metadata does not describe. The current certified archive is
+  # kisanmitra-models-2026-11-03.tar.gz, digest
+  # bb0c8fcf5b3aceb966073d72d3da0dedce952b67501d5f0c4c1400876042879d.
+  model-artifact-certification:
+    name: Served model artifact certification
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    services:
+      postgres:
+        image: pgvector/pgvector:pg16
+        env:
+          POSTGRES_USER: kisanmitra
+          POSTGRES_PASSWORD: ci_password
+          POSTGRES_DB: kisanmitra_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U kisanmitra -d kisanmitra_test"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 12
+    env:
+      APP_ENV: test
+      SECRET_KEY: ci-only-secret-key-0123456789abcdef0123456789abcdef
+      DB_HOST: localhost
+      DB_PORT: "5432"
+      DB_USER: kisanmitra
+      DB_PASSWORD: ci_password
+      DB_NAME: kisanmitra_test
+      KM_TEST_DB_APPROVED: "1"
+      KM_TEST_DB_NAME: kisanmitra_test
+      CORS_ORIGINS: "http://localhost:3000"
+      REFRESH_ENABLED: "false"
+      MODEL_DIR: /tmp/kisanmitra-models
+      MODEL_URL: ${{ vars.MODEL_ARTIFACT_URL }}
+      MODEL_SHA256: ${{ vars.MODEL_ARTIFACT_SHA256 }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+          cache-dependency-path: requirements.txt
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install pytest
+      - name: Enable pgvector extension
+        env:
+          PGPASSWORD: ci_password
+        run: psql -h localhost -U kisanmitra -d kisanmitra_test -c "CREATE EXTENSION IF NOT EXISTS vector;"
+      - name: Require a configured artifact source
+        run: |
+          if [ -z "$MODEL_URL" ] || [ -z "$MODEL_SHA256" ]; then
+            {
+              echo "### Model artifact source is not configured"
+              echo
+              echo "Set the repository variables MODEL_ARTIFACT_URL and MODEL_ARTIFACT_SHA256"
+              echo "(see docs/RENDER_NEON_CLOUDFLARE_DEPLOYMENT.md §2 for the archive build)."
+              echo
+              echo "This job deliberately fails instead of skipping: nothing in CI"
+              echo "would then prove the application can obtain and load its real"
+              echo "trained model, and a green build must mean exactly that."
+            } >> "$GITHUB_STEP_SUMMARY"
+            echo "::error::MODEL_ARTIFACT_URL / MODEL_ARTIFACT_SHA256 are empty — the served model cannot be certified."
+            exit 1
+          fi
+      - name: Obtain and load the artifact through the application's own verified path
+        run: |
+          python - <<'PY'
+          from backend.services import ml_service as m
+          m.load_model()
+          assert m.model_loaded(), m.MODEL_STATUS_DETAIL
+          p = m.SERVED_MODEL_PROVENANCE
+          print("served artifact:", p)
+          print("trained vocabulary: %d commodities / %d markets"
+                % (m.vocab_size("commodity"), m.vocab_size("market")))
+          if p["metadata_matches"] is not True:
+              raise SystemExit("model_metadata.json does not describe the loaded artifact")
+          PY
+      - name: Run model-identity tests against the served artifact
+        run: |
+          set -o pipefail
+          pytest -q -m requires_served_model -rs | tee model-identity.log
+          if grep -qE "no tests ran" model-identity.log; then
+            echo "::error::the requires_served_model selection matched nothing."
+            exit 1
+          fi
+          if grep -qE "[0-9]+ (skipped|failed|error)" model-identity.log; then
+            echo "::error::model-identity tests did not all run against the served artifact."
+            tail -20 model-identity.log
+            exit 1
+          fi
+          grep -qE "[0-9]+ passed" model-identity.log || {
+            echo "::error::no model-identity test passed against the served artifact."
+            exit 1
+          }
+      - name: Report certified model identity
+        if: always()
+        run: |
+          {
+            echo "### Model artifact certification"
+            echo
+            echo "Artifact source: ${MODEL_URL:-not configured}"
+            echo "Pinned digest: ${MODEL_SHA256:-not configured}"
+            echo
+            printf '%s\n' "$(printf '\140\140\140')"
+            tail -n 3 model-identity.log 2>/dev/null || echo "(tests did not run)"
+            printf '%s\n' "$(printf '\140\140\140')"
+          } >> "$GITHUB_STEP_SUMMARY"
 
   frontend:
     name: Frontend lint and build
@@ -104,6 +324,13 @@ jobs:
           cache-dependency-path: frontend/package-lock.json
       - run: npm ci
       - run: npm run lint --if-present
+      # Run the frontend unit tests (package.json "test": node --test tests/) in
+      # CI. These cover forecastState, saturationMap and session logic that the
+      # build does not exercise. A failure exits non-zero, which fails this job
+      # and therefore the required ci-status gate — the same honesty rule as the
+      # backend: a green build must mean the tests actually ran and passed.
+      - name: Unit tests (node --test)
+        run: npm test
       - run: npm run build
         env:
           # Same-origin API path: built PWA calls /api/* which Caddy proxies
@@ -147,7 +374,7 @@ jobs:
     name: CI status
     runs-on: ubuntu-24.04
     if: always()
-    needs: [secret-scan, backend, frontend, container-images]
+    needs: [secret-scan, backend, frontend, container-images, model-artifact-certification]
     steps:
       - name: Fail if any required job failed or was cancelled
         run: |

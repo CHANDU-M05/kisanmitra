@@ -9,7 +9,8 @@ from backend.core.config import redact_secrets, settings
 from backend.core.database import AsyncSessionLocal, get_db, engine
 from backend.core.models import CropDeclaration, MandiPrice, AdminUser, DataRefreshRun, KnowledgeChunk
 from backend.routers.auth import get_current_user
-from backend.services import data_refresh, ml_service
+from backend.services import data_refresh, freshness, ml_service
+from backend.services.freshness import FRESHNESS
 
 router = APIRouter(tags=["system"])
 
@@ -24,32 +25,39 @@ async def root() -> dict:
 
 
 @router.get("/health")
-async def health(db: AsyncSession = Depends(get_db)) -> dict:
-    db_ok = False
-    decl_count = 0
-    latest_date_str = None
-    feed_age = None
-    try:
-        result = await db.execute(select(func.count()).select_from(CropDeclaration))
-        decl_count = result.scalar() or 0
-        latest_res = await db.execute(select(func.max(MandiPrice.arrival_date)))
-        max_date = latest_res.scalar()
-        if max_date is not None:
-            latest_date_str = max_date.isoformat()
-            # arrival_date is a TIMESTAMPTZ, so compare against "today" in that
-            # same zone — a UTC-vs-IST mismatch shifts the age at day boundaries.
-            max_day = max_date.date() if isinstance(max_date, datetime) else max_date
-            feed_age = (datetime.now(max_date.tzinfo).date() - max_day).days
-        db_ok = True
-    except Exception:
-        db_ok = False
+async def health() -> dict:
+    """
+    Liveness/readiness from the cached freshness snapshot — ZERO database
+    queries per request (A2).
 
+    A load-balancer probe used to cost three queries per hit AND re-derive
+    its own freshness rules, so a database outage was reported identically to
+    an empty feed, and an unset cache could not tell "fresh" from "never
+    checked". Every feed field now comes from the one shared snapshot, whose
+    initial state is UNAVAILABLE: an unverified feed is reported as unknown,
+    never as healthy. The snapshot is kept current by the startup warm-up,
+    the independent freshness monitor, the scheduler and
+    `/internal/data/status` — not by health traffic.
+
+    Existing keys and their meanings are preserved. `database_connected`
+    is the last OBSERVED database reachability — the `db_reachable` fact the
+    independent freshness checks record when their queries complete (True)
+    or fail (False), None before any check has run (reported as not
+    connected). It is a cached connectivity signal updated by startup,
+    the monitor and the scheduler, NOT a SQL probe executed per health
+    request — but it keeps its original connectivity meaning and is never
+    derived from feed freshness: a reachable database holding a stale feed
+    is `database_connected: true` with `price_feed_status: "stale"`, and an
+    expired cache says "unavailable (verdict too old)" while honestly
+    retaining the last reachability observation. `price_feed_forecastable`
+    stays false for STALE, EMPTY and UNAVAILABLE alike.
+    """
+    snap = FRESHNESS.get()
+    # Connectivity, not freshness: True only when the last observation was a
+    # completed query. None (never checked) is conservatively "not connected".
+    db_ok = snap.db_reachable is True
     model_ok = ml_service.model_loaded()
     overall_healthy = db_ok and model_ok
-
-    # Feed age is reported separately from db_ok: a reachable database holding
-    # month-old prices is NOT a healthy forecasting system, and an operator
-    # watching only "database_connected" would miss it.
 
     return {
         "status": "healthy" if overall_healthy else "degraded",
@@ -66,12 +74,23 @@ async def health(db: AsyncSession = Depends(get_db)) -> dict:
         # observable health signal, not a silent mislabel of displayed accuracy.
         "model_provenance": ml_service.SERVED_MODEL_PROVENANCE,
         "model_metadata_matches": ml_service.MODEL_METADATA_MATCHES,
-        "declarations": decl_count,
-        "latest_price_date": latest_date_str,
-        "price_feed_age_days": feed_age,
-        "price_feed_forecastable": (
-            feed_age is not None and feed_age <= settings.price_max_age_days
+        "declarations": snap.declarations,
+        "latest_price_date": (
+            snap.newest_market_date.isoformat() if snap.newest_market_date else None
         ),
+        "price_feed_age_days": snap.age_days,
+        "price_feed_forecastable": snap.forecastable,
+        # A2: the explicit four-state verdict behind the fields above, plus
+        # how old the cached judgement is so a consumer can see an
+        # UNAVAILABLE-from-expiry is staleness of the CHECK, not of the data.
+        "price_feed_status": snap.state.value,
+        "price_feed_status_detail": snap.detail,
+        "freshness_cache": {
+            "checked_at": (
+                snap.checked_at_wall.isoformat() if snap.checked_at_wall else None
+            ),
+            "ttl_seconds": settings.freshness_cache_ttl_seconds,
+        },
         "timestamp": datetime.now().isoformat(),
     }
 
@@ -105,8 +124,15 @@ async def data_status(
     """
     Feed health plus the last refresh attempts — the evidence needed to answer
     "is the pipeline working?" without reading application logs.
+
+    This route queries live (it is admin-authenticated and low-traffic, unlike
+    /health), and shares its computed snapshot into the freshness cache on the
+    way out, so an operator checking status also warms the value /health
+    serves. Behaviour for existing consumers is unchanged.
     """
-    status = await data_refresh.data_freshness(db)
+    snap = await freshness.compute_freshness(db)
+    FRESHNESS.set(snap)
+    status = await data_refresh.data_freshness(db, snapshot=snap)
     runs = (await db.execute(
         select(DataRefreshRun)
         .order_by(DataRefreshRun.started_at.desc())

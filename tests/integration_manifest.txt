@@ -1,0 +1,19 @@
+# Canonical inventory of DB-backed integration tests (marker: integration_db).
+#
+# CI asserts this list EXACTLY equals the collected `-m integration_db` selection
+# and that every one of these tests EXECUTES (0 skipped) against the disposable
+# PostgreSQL service. Adding, removing, renaming, or de-marking a DB test must be
+# a DELIBERATE edit to this manifest — an accidental drop turns CI red instead of
+# silently shrinking integration coverage. One node id per line; blank lines and
+# leading `#` comments are ignored.
+tests/test_data_refresh_pipeline.py::test_advisory_lock_serialises_refreshes_across_workers
+tests/test_data_refresh_pipeline.py::test_alias_spelling_refresh_cannot_split_the_ragi_series
+tests/test_data_refresh_pipeline.py::test_failed_refresh_is_recorded_and_leaves_the_database_untouched
+tests/test_data_refresh_pipeline.py::test_lock_releases_after_the_first_holder_finishes
+tests/test_data_refresh_pipeline.py::test_refresh_lands_new_rows_and_restores_forecasting
+tests/test_data_refresh_pipeline.py::test_rejected_rows_are_counted_not_dropped_silently
+tests/test_data_refresh_pipeline.py::test_rerunning_a_refresh_does_not_double_count_a_mandi_day
+tests/test_declaration_identity.py::test_live_pg_concurrent_duplicates_single_row
+tests/test_declaration_identity.py::test_live_pg_migration_and_dual_uniqueness
+tests/test_declaration_identity.py::test_live_pg_rollback_collision_refusal
+tests/test_postgres_integration.py::test_live_postgres_upsert_and_unique_index

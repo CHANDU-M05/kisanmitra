@@ -79,3 +79,10 @@ env.txt
 
 # local data backups (contain PII)
 backups/
+
+# pytest per-user temporary basetemp dirs (pytest-of-<user>/pytest-N/...).
+# These hold throwaway fixtures (synthetic pickles, scratch tarballs) written by
+# tmp_path/tmp_path_factory when TMPDIR points into the workspace. They are
+# regenerated every run and must never enter a commit or release candidate.
+# Narrow to the pytest-of- prefix so no real source path is matched.
+pytest-of-*/

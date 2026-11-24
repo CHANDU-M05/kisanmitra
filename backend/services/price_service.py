@@ -15,14 +15,33 @@ Three integrity rules enforced here:
 from __future__ import annotations
 
 import math
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 
 from sqlalchemy import func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.core.config import settings
 from backend.core.models import MandiPrice
-from backend.services import ml_service
+from backend.services import data_refresh, ml_service
+
+# ── Forecast calibration ─────────────────────────────────────────────────────
+# The RandomForest learned next-day change RATES from a 2023-24 sample and its
+# walk-forward accuracy is 9.2% MAE (model_metadata.json, mae_pct). Applied to a
+# 2026 price level of 3000-5000 INR/qtl that rate gives a near-flat estimate,
+# while a seasonal-peak crop's own history spans ±2000 INR — so the raw point
+# estimate lands far outside the market's observed range yet is only ~3% away
+# from the spot price. A band expressed in percent of the spot would therefore
+# never fire, and a band expressed in absolute INR would reject every honest
+# prediction for high-value vegetables.
+#
+# The defensible envelope below takes the wider of two views: half the crop's
+# own observed spread at this mandi, or twice the model's published MAE applied
+# to that crop's average price. The first keeps a wide-range crop from being
+# judged by a tight absolute band; the second ties the gate to measured error
+# rather than to a preference. The existing 5x sanity guard in ml_service stays
+# as the outermost bound and is unaffected.
+_FORECAST_BAND_MIN_PCT_OF_SPREAD = 0.5
+_FORECAST_BAND_MIN_MAE_MULTIPLE = 2.0
 
 _DISTRICT_ALIASES: dict[str, list[str]] = {
     "Tumakuru": ["Tumkur", "Tumakuru"],
@@ -60,11 +79,17 @@ def _as_of_date(as_of_raw) -> date | None:
 
 
 def _age_in_days(as_of_raw, today: date | None = None) -> int | None:
-    """Days between the record's market date and today. None = unknown age."""
+    """Days between the record's market date and today. None = unknown age.
+
+    ``today`` defaults to the market calendar (IST), because AGMARKNET stamps
+    arrival dates in IST: measuring them with a UTC-host clock makes a fresh
+    row report a negative age for a few hours every evening, and the same
+    frame must be used by the SLA gate and by `data_refresh`'s future-reject.
+    """
     d = _as_of_date(as_of_raw)
     if d is None:
         return None
-    return (today or date.today()).toordinal() - d.toordinal()
+    return (today or data_refresh.market_today()).toordinal() - d.toordinal()
 
 
 def record_age_days(as_of_raw, today: date | None = None) -> int | None:
@@ -108,7 +133,7 @@ async def _freshness_refusal(
     max_age = settings.price_max_age_days
     feed_newest = await _feed_newest_date(db)
     record_day = _as_of_date(row.arrival_date)
-    feed_age = (date.today().toordinal() - feed_newest.toordinal()) if feed_newest else None
+    feed_age = (data_refresh.market_today().toordinal() - feed_newest.toordinal()) if feed_newest else None
     # Three genuinely different situations, and the reader must hear the right
     # one: our record is the newest the feed has (nothing published at all), the
     # feed itself is stalled while this crop lags further, or the feed is current
@@ -290,6 +315,33 @@ async def _predict_tail(
     if history_count < 3:
         data_quality.append("history_sparse")
 
+    # ── Trained-vocabulary gate ───────────────────────────
+    # A LabelEncoder has no unseen category: encoding a commodity or mandi it
+    # never trained on silently produced the code for its first sorted class,
+    # so the model scored "Brinjal at Arasikere" regardless of what was asked
+    # and published a confident, wrong number. Refuse rather than guess — the
+    # dashboard already renders a null forecast for any type other than
+    # forecast/anomaly_flagged.
+    coverage = ml_service.encoder_coverage(crop, market)
+    if coverage["checked"] and not coverage["supported"]:
+        return {
+            "type":            "unsupported_vocabulary",
+            **region,
+            "current_price":   round(current_price, 0),
+            "price_as_of":     price_as_of,
+            "days_old":        age_days,
+            "data_source":     data_source,
+            "source_market":   source_market,
+            "data_quality":    data_quality,
+            "arrivals_tonnes": arrivals,
+            "arrivals_provenance": arrivals_provenance,
+            "missing_axes":    coverage["missing"],
+            "anomaly_threshold_pct": None,
+            "crop_mape_pct":   None,
+            "msp_floor":       None,
+            "msp_ratio":       None,
+        }
+
     X = await ml_service.build_features(
         current_price, arrivals, date.today().month, crop, market, db
     )
@@ -312,10 +364,76 @@ async def _predict_tail(
         # put an invalid literal into the JSON body and silently disable the
         # anomaly comparison. Refuse as a domain error instead — same 503 path
         # the sanity guard uses — rather than emit a plausible-looking payload.
+        #
+        # This must stay ahead of the distribution gate below: every comparison
+        # against a NaN is False, so a non-finite price would be reported as
+        # "outside the defensible range" and answer a data-corruption fault with
+        # a calibration message.
         return {
             "type": "error",
             "detail": f"Non-finite forecast deviation for {crop} at {market} — refusing to publish.",
         }
+
+    # ── Historical-range validation ───────────────────────
+    # Passing the vocabulary gate confirms the model was asked about a category
+    # it knows; it does not confirm the resulting number is credible. Compare
+    # the point estimate against the distribution this crop actually has at
+    # this mandi and withhold the headline figure when the model disagrees with
+    # its own evidence base (see the calibration constants in this module).
+    dist = (await db.execute(
+        select(func.min(MandiPrice.modal_price),
+               func.max(MandiPrice.modal_price),
+               func.avg(MandiPrice.modal_price),
+               func.stddev(MandiPrice.modal_price),
+               func.count(MandiPrice.id))
+        .where(
+            MandiPrice.commodity.ilike(c_pattern),
+            MandiPrice.market.ilike(market),
+            MandiPrice.modal_price.isnot(None),
+            MandiPrice.arrival_date >= date.today() - timedelta(days=730),
+        )
+    )).one()
+    hist_min, hist_max, hist_mean, hist_sd, hist_count = dist[:5]
+    if (hist_count >= 3 and hist_min is not None and hist_max is not None
+            and math.isfinite(hist_min) and math.isfinite(hist_max)
+            and math.isfinite(pred)):
+        spread = hist_max - hist_min
+        # A zero dispersion (one repeated price) would collapse the band to the
+        # MAE term alone, so fall back to that term rather than to ±0.
+        band = max(
+            _FORECAST_BAND_MIN_PCT_OF_SPREAD * spread,
+            _FORECAST_BAND_MIN_MAE_MULTIPLE * (hist_mean or current_price)
+            * (meta["crop_mape_pct"] or 0.0) / 100.0,
+        )
+        defensible_low  = hist_min - band
+        defensible_high = hist_max + band
+        if not (defensible_low <= pred <= defensible_high):
+            return {
+                "type":            "model_validation_warning",
+                **region,
+                "current_price":   round(current_price, 0),
+                "price_as_of":     price_as_of,
+                "days_old":        age_days,
+                "data_source":     data_source,
+                "source_market":   source_market,
+                "data_quality":    data_quality,
+                "arrivals_tonnes": arrivals,
+                "arrivals_provenance": arrivals_provenance,
+                # Disclosed but deliberately not presented as a forecast: the
+                # reader can see how far off the model is, not just that it is.
+                "model_raw_forecast": round(pred, 0),
+                "historical_min":  round(hist_min, 0),
+                "historical_max":  round(hist_max, 0),
+                "historical_mean": round(hist_mean, 0) if hist_mean else None,
+                "historical_stddev": round(hist_sd, 0) if hist_sd else None,
+                "historical_records": hist_count,
+                "band_width":      round(band, 0),
+                "defensible_low":  round(defensible_low, 0),
+                "defensible_high": round(defensible_high, 0),
+                "crop_mape_pct":   meta["crop_mape_pct"],
+                "anomaly_threshold_pct": None,
+            }
+
     # MAPE-aware gate: on volatile crops (Tomato/Marigold ~28-31% benchmark
     # error) a fixed 30% flag would label the model's own noise a market
     # SPIKE/CRASH. The effective threshold travels in the response so every

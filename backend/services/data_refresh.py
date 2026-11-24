@@ -43,6 +43,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.core.config import redact_secrets, settings
 from backend.core.models import DataRefreshRun, MandiPrice
+from backend.services import freshness
 
 logger = logging.getLogger("kisanmitra.data_refresh")
 
@@ -93,6 +94,28 @@ REJECT_BAD_ORDER  = "min_price_above_modal"
 REJECT_OTHER_MARKET = "state_mismatch"
 
 _WINDOW_START_KEY = "_window_start"
+
+# AGMARKNET dates every mandi row in Indian Standard Time. The ingestion window
+# must be evaluated in the same calendar frame, or the current Indian-date rows
+# are rejected as REJECT_FUTURE for ~5.5 hours each day (00:00–05:30 IST) — a
+# slow-motion starvation of the feed that surfaces days later as "stale_data"
+# refusals in `price_service`. UTC walls clocks; this is the market clock.
+MARKET_TZ = timezone(timedelta(hours=5, minutes=30))  # Asia/Kolkata, no DST
+
+
+def market_today(now: datetime | None = None) -> date:
+    """Today's calendar date in the market's timezone (IST).
+
+    `now` defaults to wall-clock UTC; an explicit value keeps the function
+    pure and testable. Naive datetimes are treated as UTC so a stray
+    `datetime.now()` from a misconfigured host cannot silently shift the
+    window in the other direction.
+    """
+    if now is None:
+        now = datetime.now(timezone.utc)
+    elif now.tzinfo is None:
+        now = now.replace(tzinfo=timezone.utc)
+    return now.astimezone(MARKET_TZ).date()
 
 
 class RefreshFetchError(RuntimeError):
@@ -469,7 +492,9 @@ async def run_refresh(
     refresh fails — because an operator debugging a stall needs to see the
     attempt, its error, and when it happened.
     """
-    today = today or datetime.now(timezone.utc).date()
+    # Market-local (IST) date: records are stamped in IST, so "today" and the
+    # future-reject boundary must agree with the source's calendar (see MARKET_TZ).
+    today = today or market_today()
     lookback = lookback_days if lookback_days is not None else settings.refresh_lookback_days
     window_start = today - timedelta(days=lookback)
     crops = list(crops) if crops else list(CROP_API_NAMES)
@@ -590,15 +615,31 @@ async def run_refresh(
     return summary
 
 
-async def data_freshness(db: AsyncSession, *, today: date | None = None) -> dict[str, Any]:
+async def data_freshness(
+    db: AsyncSession, *,
+    today: date | None = None,
+    snapshot: freshness.FreshnessSnapshot | None = None,
+) -> dict[str, Any]:
     """
     Current feed health: newest market date, its age, and the last refresh
     attempt. Consumed by `/system/data/status` and by the answer formatter, so
     a farmer is told the truth about *why* no forecast exists.
+
+    The freshness fields come from the single shared classification
+    (`freshness.compute_freshness`) — this function no longer keeps its own
+    copy of the FRESH/STALE/EMPTY rules. `state` names that verdict
+    explicitly; the pre-existing keys keep their old meanings, including
+    `forecastable` being False for every non-FRESH state. A caller that has
+    already computed a snapshot (the cache update in the admin route) passes
+    it in so one request does not query the same aggregates twice.
+
+    Like `freshness.compute_freshness` this never raises on query failure —
+    it reports `state=unavailable` with a redacted reason — but a failure in
+    the last-refresh lookup below still propagates, exactly as before, so
+    `/internal/data/status` keeps its existing error behaviour.
     """
-    today = today or datetime.now(timezone.utc).date()
-    newest = await get_newest_date(db)
-    age_days = (today - newest).days if newest else None
+    if snapshot is None:
+        snapshot = await freshness.compute_freshness(db, today=today)
 
     last = (await db.execute(
         select(DataRefreshRun)
@@ -607,11 +648,18 @@ async def data_freshness(db: AsyncSession, *, today: date | None = None) -> dict
     )).scalar_one_or_none()
 
     return {
-        "rows": await get_row_count(db),
-        "newest_market_date": newest.isoformat() if newest else None,
-        "age_days": age_days,
-        "max_age_days": settings.price_max_age_days,
-        "forecastable": bool(age_days is not None and age_days <= settings.price_max_age_days),
+        "rows": snapshot.rows,
+        "newest_market_date": (
+            snapshot.newest_market_date.isoformat()
+            if snapshot.newest_market_date else None
+        ),
+        "age_days": snapshot.age_days,
+        "max_age_days": snapshot.max_age_days,
+        "forecastable": snapshot.forecastable,
+        # A2: the explicit state behind `forecastable`. Additive — existing
+        # consumers keep reading the keys they always did.
+        "state": snapshot.state.value,
+        "freshness_detail": snapshot.detail,
         "last_refresh": None if last is None else {
             "id": last.id,
             "status": last.status,

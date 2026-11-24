@@ -213,28 +213,25 @@ def test_ragi_alias_spellings_dedupe_into_one_day_with_no_database():
 
 
 # ── Live PostgreSQL integration (fake fetcher, real writes) ───────────────────
-
-def _db_reachable() -> bool:
-    try:
-        async def probe():
-            from backend.core.database import AsyncSessionLocal
-            async with AsyncSessionLocal() as db:
-                await db.execute(text("SELECT 1"))
-        asyncio.run(probe())
-        return True
-    except Exception:
-        return False
-
-
-requires_db = pytest.mark.skipif(
-    not _db_reachable(), reason="PostgreSQL not reachable for integration tests"
-)
+# DB safety is centralised in conftest/db_safety: `requires_db` is the
+# `integration_db` marker (a local SKIP convenience), and the real boundary is
+# the connection-level guard, which refuses any PostgreSQL connection that is not
+# an explicitly designated disposable test database — marked or not. We read the
+# same config-only verdict here so this module's own schema setup (DDL) can never
+# run against a real store, and never opens a probe at import.
+from conftest import requires_db, disposable_db_status
 
 
 @pytest.fixture(scope="module", autouse=True)
 def _ensure_schema():
-    """Create data_refresh_runs if this checkout has not started the API yet."""
-    if not _db_reachable():
+    """Create data_refresh_runs only against an authorized disposable test DB.
+
+    Runs init_db (DDL) solely when db_safety's designation passes (explicit
+    opt-in, exact KM_TEST_DB_NAME, loopback/allowlisted host); otherwise it is a
+    no-op and the individual @requires_db tests skip (or, if they tried to
+    connect anyway, the guard fails them closed).
+    """
+    if not disposable_db_status()[0]:
         return
     import importlib
     init_db = importlib.import_module("scripts.00_init_db").init_db

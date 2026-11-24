@@ -25,7 +25,7 @@ import pytest
 
 from backend.core.config import settings
 from price_test_helpers import (
-    arrivals_row, empty_first, history_probe, price_db, price_row, _res_with_first,
+    arrivals_row, dist_probe, empty_first, history_probe, market_day, price_db, price_row, _res_with_first,
 )
 
 
@@ -68,8 +68,7 @@ async def test_stale_price_is_reported_not_forecast():
     assert result["type"] == "stale_data"
     assert result["days_old"] == 10
     assert result["max_age_days"] == settings.price_max_age_days
-    assert result["price_as_of"] == (
-        datetime.date.today() - datetime.timedelta(days=10)).isoformat()
+    assert result["price_as_of"] == market_day(10).date().isoformat()
     # The last known price is disclosed WITH its date...
     assert result["current_price"] == 1800.0
     # ...but nothing here can be mistaken for a current recommendation.
@@ -158,6 +157,7 @@ async def test_missing_record_date_is_flagged():
         _res_with_first(row),
         _res_with_first(arrivals_row(80.0)),
         history_probe(5),
+        dist_probe(2000.0),
     ])
     result = await _forecast(db)
 
@@ -176,6 +176,7 @@ async def test_arrivals_are_resolved_against_the_spot_price_market():
         _res_with_first(price_row(2000.0, market="Aramane", district="Kolar")),
         _res_with_first(arrivals_row(42.0, market="Aramane")),
         history_probe(5),
+        dist_probe(2000.0),
     ])
     result = await _forecast(db, district="Kolar")
 
@@ -201,6 +202,7 @@ async def test_unrecorded_arrivals_are_disclosed_as_unknown():
         _res_with_first(price_row(2000.0)),
         empty_first(),            # no arrivals recorded for that market
         history_probe(5),
+        dist_probe(2000.0),
     ])
     result = await _forecast(db)
 
@@ -208,9 +210,11 @@ async def test_unrecorded_arrivals_are_disclosed_as_unknown():
     assert "arrivals_unknown" in result["data_quality"]
     assert result["arrivals_tonnes"] == 0.0
     assert result["arrivals_provenance"] == "unknown"
-    # Exactly one arrivals query: the tonnage of a DIFFERENT mandi in the same
-    # district is never substituted for the mandi whose price we are using.
-    assert db.execute.await_count == 3
+    # One arrivals query only: the tonnage of a DIFFERENT mandi in the same
+    # district is never substituted for the mandi whose price we are using. The
+    # remaining calls are the spot row, the history probe and the distribution
+    # probe the forecast credibility gate reads.
+    assert db.execute.await_count == 4
     assert "district" not in str(db.execute.await_args_list[1].args[0]
                                  .compile(compile_kwargs={"literal_binds": True}))
 
@@ -223,6 +227,7 @@ async def test_arrival_tonnage_from_another_market_is_disclosed():
         _res_with_first(price_row(2000.0, market="Kolar")),
         _res_with_first(arrivals_row(90.0, market="Hoskote")),
         history_probe(5),
+        dist_probe(2000.0),
     ])
     result = await _forecast(db)
 
@@ -239,6 +244,7 @@ async def test_arrival_date_mismatch_is_disclosed():
         _res_with_first(price_row(2000.0, days_old=0)),
         _res_with_first(arrivals_row(80.0, days_old=7)),
         history_probe(5),
+        dist_probe(2000.0),
     ])
     result = await _forecast(db)
 
@@ -397,11 +403,27 @@ def test_formatter_never_calls_an_old_price_todays_price():
 # published statistic, not a measurement, so the response has to say which one
 # it used — and the frontend must stop dividing by its own invented number.
 
-def _sat_db(areas):
+def _sat_db(areas, seasons=("kharif",)):
+    """
+    Two queries, in the order calc_saturation issues them:
+
+      1. season inventory  -> .all()  of (season, declarations, latest) tuples,
+         so the service can resolve the requested cycle against what is actually
+         stored instead of matching it byte-for-byte and finding nothing.
+      2. acreage rows      -> .scalars().all()
+    """
+    inventory = MagicMock()
+    # Declared timestamps ascend with the argument order, so "the latest season
+    # available" is a decided property in the fixture rather than a coincidence
+    # of how the mock happens to iterate.
+    base = datetime.datetime(2026, 1, 1)
+    inventory.all.return_value = [
+        (s, len(areas), base + datetime.timedelta(days=i)) for i, s in enumerate(seasons)
+    ]
+    rows = MagicMock()
+    rows.scalars.return_value = MagicMock(all=lambda: areas)
     db = MagicMock()
-    res = MagicMock()
-    res.scalars.return_value = MagicMock(all=lambda: areas)
-    db.execute = AsyncMock(return_value=res)
+    db.execute = AsyncMock(side_effect=[inventory, rows])
     return db
 
 
@@ -433,3 +455,162 @@ async def test_saturation_fallback_is_labelled_as_a_fallback():
         assert result["saturation_pct"] == 10.0
     finally:
         farmer_service._SATURATION_CACHE.clear()
+
+
+@pytest.mark.asyncio
+async def test_fallback_counts_every_spelling_of_the_latest_season():
+    """
+    One cycle written two ways must not measure differently depending on which
+    spelling the caller happens to use. The real local data has exactly this
+    shape: 334 declarations stored as "Kharif 2026" and 12 as "kharif_2026".
+    Falling back to a single stored string reported 5 declarations for Kolar
+    Tomato while selecting "Kharif 2026" in the dropdown reported 7 — two
+    numbers for one season, which is what the header chip and the map showed.
+    """
+    from backend.services import farmer_service
+
+    farmer_service._SATURATION_CACHE.clear()
+    try:
+        db = _sat_db([5.0, 5.0, 6.5],
+                     seasons=("rabi_2025_2026", "kharif_2026", "Kharif 2026"))
+        result = await farmer_service.calc_saturation(
+            "Kolar", "Tomato", "Rabi 2026-2027", db)
+
+        assert result["season_match"] == "latest_available"
+        assert result["season_fallback"] is True
+        assert result["has_declarations"] is True
+        assert result["season"] == "Kharif 2026"      # readable, same season
+        assert result["farmer_count"] == 3            # both spellings counted
+
+        # The acreage query bound BOTH stored spellings and left the older
+        # season out: the fallback is a season, not a string.
+        sql = str(db.execute.await_args_list[1].args[0]
+                      .compile(compile_kwargs={"literal_binds": True}))
+        assert "'kharif_2026'" in sql
+        assert "'Kharif 2026'" in sql
+        assert "'rabi_2025_2026'" not in sql
+    finally:
+        farmer_service._SATURATION_CACHE.clear()
+
+
+@pytest.mark.asyncio
+async def test_no_declarations_anywhere_is_reported_as_such():
+    """
+    A district/crop with nothing on record is not 0% saturated. The service
+    still returns a number (bot formatters do `{:.0f}` on it), but pairs it with
+    has_declarations=false so no caller can render the absence of data as an
+    all-clear.
+    """
+    from backend.services import farmer_service
+
+    farmer_service._SATURATION_CACHE.clear()
+    try:
+        empty = MagicMock()
+        empty.all.return_value = []
+        db = AsyncMock()
+        db.execute = AsyncMock(side_effect=[empty])
+        result = await farmer_service.calc_saturation("Mysuru", "Paddy", "Kharif 2026", db)
+
+        assert result["season_match"] == "none"
+        assert result["has_declarations"] is False
+        assert result["season_fallback"] is False
+        assert result["seasons_with_data"] == []
+        assert result["saturation_pct"] == 0.0
+        # No acreage query was attempted — there is nothing to measure.
+        assert db.execute.await_count == 1
+    finally:
+        farmer_service._SATURATION_CACHE.clear()
+
+
+# ── Forecast credibility gates (§P0) ─────────────────────────────────────────
+# Both gates answer "no number" to a question the model cannot honestly answer.
+# They are the difference between a forecast and a plausible-looking one.
+
+@pytest.mark.asyncio
+async def test_untrained_category_is_refused_before_any_encoding_happens():
+    """
+    A LabelEncoder has no unseen category: encoding one silently returned the
+    code of the FIRST sorted class, so "Capsicum at Ramanagara" was scored as
+    "Brinjal at Arasikere" and published with a confidence interval. The
+    refusal must therefore precede feature building — a vector that already
+    contains a fabricated code cannot be un-fabricated downstream.
+    """
+    import contextlib
+    from backend.services.price_service import get_price_forecast
+
+    db = price_db(price=2000.0, days_old=1)
+    coverage = {"checked": True, "supported": False, "missing": ["commodity"],
+                "commodity_class": None, "market_class": "Kolar"}
+    build = AsyncMock(return_value={})
+    with contextlib.ExitStack() as stack:
+        for p in _ml_patches():
+            stack.enter_context(p)
+        stack.enter_context(patch("backend.services.ml_service.build_features", new=build))
+        stack.enter_context(patch("backend.services.ml_service.encoder_coverage",
+                                  return_value=coverage))
+        result = await get_price_forecast("Capsicum", "Kolar", db)
+
+    assert result["type"] == "unsupported_vocabulary"
+    assert result["missing_axes"] == ["commodity"]
+    assert result["crop_mape_pct"] is None      # nothing crop-specific was computed
+    build.assert_not_awaited()
+    for forbidden in ("forecast", "signal", "lower", "upper", "deviation_pct"):
+        assert forbidden not in result, f"refusal must not carry {forbidden}"
+    # The spot price is still a real observation and stays disclosed.
+    assert result["current_price"] == 2000.0
+
+
+@pytest.mark.asyncio
+async def test_forecast_outside_the_mandis_own_history_is_withheld():
+    """
+    Passing the vocabulary gate only proves the model was asked about a category
+    it knows. Here the crop and mandi are both trained, but the estimate is
+    9000 against a history of 1000-4000 for this very mandi: the model is
+    contradicted by its own evidence base, so no headline figure is published —
+    while the disagreement itself stays visible for an engineer to act on.
+    """
+    import contextlib
+    from backend.services.price_service import get_price_forecast
+
+    db = price_db(price=2000.0, days_old=1)
+    with contextlib.ExitStack() as stack:
+        for p in _ml_patches():
+            stack.enter_context(p)
+        stack.enter_context(patch("backend.services.ml_service.make_prediction",
+                                  return_value={"pred": 9000.0, "low": 8000.0,
+                                                "high": 10000.0}))
+        result = await get_price_forecast("Tomato", "Kolar", db)
+
+    assert result["type"] == "model_validation_warning"
+    assert result["model_raw_forecast"] == 9000.0
+    assert result["historical_min"] == 1000.0
+    assert result["historical_max"] == 4000.0
+    assert result["defensible_high"] == 5500.0     # max + band(1500)
+    assert result["historical_records"] == 50
+    for forbidden in ("forecast", "signal", "signal_kannada", "lower", "upper"):
+        assert forbidden not in result, f"withheld estimate must not carry {forbidden}"
+
+
+@pytest.mark.asyncio
+async def test_non_finite_forecast_is_a_data_fault_not_a_calibration_warning():
+    """
+    Every comparison against NaN is False, so the distribution gate would have
+    reported a corrupt spot price as "outside the defensible range". The
+    finite-value guard has to run first, and answer with the domain error the
+    router maps to 503.
+    """
+    import contextlib
+    from backend.services.price_service import get_price_forecast
+
+    db = price_db(price=2000.0, days_old=1)
+    with contextlib.ExitStack() as stack:
+        for p in _ml_patches():
+            stack.enter_context(p)
+        stack.enter_context(patch("backend.services.ml_service.make_prediction",
+                                  return_value={"pred": float("nan"), "low": 0.0,
+                                                "high": 0.0}))
+        result = await get_price_forecast("Tomato", "Kolar", db)
+
+    assert result["type"] == "error"
+    assert "Non-finite" in result["detail"]
+    assert "defensible_low" not in result

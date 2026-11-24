@@ -9,6 +9,10 @@
     /* Set base font-size to 17.5px to scale up all rem-based text sizes by ~9.3% */
     font-size: 17.5px;
     scroll-behavior: smooth;
+    color-scheme: light;
+  }
+  html.dark {
+    color-scheme: dark;
   }
   body {
     @apply font-sans bg-slate-50 text-slate-900 dark:bg-slate-950 dark:text-slate-50 antialiased;
