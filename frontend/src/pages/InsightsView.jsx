@@ -1,7 +1,7 @@
 // src/pages/InsightsView.jsx
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import { Shield, Eye, AlertTriangle, MapPin } from 'lucide-react';
-import { MapContainer, TileLayer, Marker, Popup, Tooltip as LeafletTooltip, useMap } from 'react-leaflet';
+import { MapContainer, TileLayer, Marker, Popup, Tooltip as LeafletTooltip, GeoJSON, useMap } from 'react-leaflet';
 import L from 'leaflet';
 import 'leaflet/dist/leaflet.css';
 import { derive_current_season, get_season_options } from '../config';
@@ -9,14 +9,17 @@ import { fetchJson, cachedGet, apiUrl } from '../api';
 import {
   buildRadarRow, tileFallbackNote, useMapSource, TILE_ATTRIBUTION,
 } from '../saturationMap';
+import karnatakaGeoJson from '../assets/karnataka_districts.json';
 
 export default function InsightsView() {
   const [season, setSeason] = useState(derive_current_season);
   const [allocationData, setAllocationData] = useState([]);
+  const [rawDeclarationCount, setRawDeclarationCount] = useState(null);
   const [interventionRadar, setInterventionRadar] = useState([]);
   const [loading, setLoading] = useState(true);
   const [filterQuery, setFilterQuery] = useState('');
   const [errorNote, setErrorNote] = useState('');
+  const [selectedDistrict, setSelectedDistrict] = useState(null);
 
   const isAdmin = localStorage.getItem('role') === 'admin' && localStorage.getItem('auth_token') !== null;
 
@@ -117,6 +120,10 @@ export default function InsightsView() {
       .then(summary => {
         if (cancelled) return;
 
+        if (summary && typeof summary.total_declarations === 'number') {
+          setRawDeclarationCount(summary.total_declarations);
+        }
+
         if (summary && summary.crops) {
           const sortedCrops = Object.entries(summary.crops)
             .map(([name, count]) => ({ name: name.toUpperCase(), value: count }))
@@ -177,6 +184,67 @@ export default function InsightsView() {
 
     return () => { cancelled = true; ctrl.abort(); };
   }, [season]);
+
+  const radarByDistrict = useMemo(() => {
+    const map = {};
+    for (const item of interventionRadar) {
+      if (item.district) {
+        map[item.district.toLowerCase()] = item;
+      }
+    }
+    return map;
+  }, [interventionRadar]);
+
+  const geoJsonStyle = (feature) => {
+    const districtName = feature?.properties?.district || feature?.properties?.name || '';
+    const data = radarByDistrict[districtName.toLowerCase()];
+    const status = data ? data.status : 'NO DATA';
+    const isSelected = selectedDistrict && selectedDistrict.toLowerCase() === districtName.toLowerCase();
+
+    let fillColor = '#94a3b8'; // slate-400 default for unmeasured / no data
+    if (status === 'HIGH') fillColor = '#ef4444';
+    else if (status === 'MEDIUM') fillColor = '#f59e0b';
+    else if (status === 'LOW') fillColor = '#10b981';
+
+    return {
+      fillColor,
+      weight: isSelected ? 2.5 : 1.2,
+      opacity: 0.9,
+      color: isSelected ? '#ffffff' : (document.documentElement.classList.contains('dark') ? '#475569' : '#cbd5e1'),
+      dashArray: data ? '' : '3',
+      fillOpacity: isSelected ? 0.65 : (data ? 0.45 : 0.2),
+    };
+  };
+
+  const onEachFeature = (feature, layer) => {
+    const districtName = feature?.properties?.district || feature?.properties?.name || 'District';
+    const data = radarByDistrict[districtName.toLowerCase()];
+
+    layer.on({
+      mouseover: (e) => {
+        const l = e.target;
+        l.setStyle({
+          weight: 2.5,
+          fillOpacity: 0.7,
+        });
+      },
+      mouseout: (e) => {
+        const l = e.target;
+        l.setStyle(geoJsonStyle(feature));
+      },
+      click: () => {
+        setSelectedDistrict(districtName);
+      },
+    });
+
+    const cropInfo = data ? `${data.crop}${!data.saturationUnavailable ? ` · ${data.saturation.toFixed(1)}%` : ' · no data'}` : 'No declarations';
+    layer.bindTooltip(`<strong>${districtName}</strong><br/><span style="font-size:10px">${cropInfo}</span>`, {
+      sticky: true,
+      className: 'custom-map-tooltip',
+    });
+  };
+
+  const selectedData = selectedDistrict ? radarByDistrict[selectedDistrict.toLowerCase()] : null;
 
   const filteredRadar = interventionRadar.filter(item => 
     item.district.toLowerCase().includes(filterQuery.toLowerCase()) || 
@@ -273,7 +341,7 @@ export default function InsightsView() {
               <h3 className="text-xs font-bold uppercase tracking-wider text-slate-800 dark:text-white flex flex-wrap items-center gap-x-2 gap-y-1 border-b border-slate-100 dark:border-white/5 pb-3 mb-4">
                 <Shield className="h-4 w-4 text-emerald-500" /> Crop Allocation
                 <span className="text-[9px] font-semibold normal-case tracking-normal text-slate-500 dark:text-slate-400">
-                  live sowing declarations by count · {totalAllocated} total records · cross-season
+                  {totalAllocated} classified crop allocations{rawDeclarationCount != null && rawDeclarationCount !== totalAllocated ? ` (${rawDeclarationCount} raw declarations)` : ''} · cross-season
                 </span>
               </h3>
               <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-x-6 gap-y-3">
@@ -338,6 +406,13 @@ export default function InsightsView() {
                   </div>
                 )}
                 
+                <GeoJSON
+                  key={JSON.stringify(radarByDistrict)}
+                  data={karnatakaGeoJson}
+                  style={geoJsonStyle}
+                  onEachFeature={onEachFeature}
+                />
+
                 <FitBounds 
                   positions={filteredRadar.map(n => DISTRICT_COORDS[n.district]).filter(Boolean)} 
                 />
@@ -376,6 +451,51 @@ export default function InsightsView() {
               </MapContainer>
             </div>
             
+            {/* Selected District Detail Card */}
+            {selectedDistrict && (
+              <div className="absolute top-16 left-4 z-[1000] bg-white/95 dark:bg-slate-900/95 backdrop-blur-md border border-slate-200 dark:border-white/10 p-3.5 rounded-xl shadow-xl max-w-[240px] text-xs">
+                <div className="flex items-center justify-between border-b pb-1.5 border-slate-150 dark:border-white/10 mb-2">
+                  <span className="font-black uppercase tracking-wider text-slate-800 dark:text-white">
+                    {selectedDistrict}
+                  </span>
+                  <button
+                    onClick={() => setSelectedDistrict(null)}
+                    className="text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 text-xs font-bold px-1"
+                    aria-label="Close district detail"
+                  >
+                    ✕
+                  </button>
+                </div>
+                {selectedData ? (
+                  <div className="space-y-1 text-[11px] text-slate-600 dark:text-slate-350">
+                    <div><span className="font-semibold text-slate-700 dark:text-slate-300">Crop:</span> {selectedData.crop}</div>
+                    <div>
+                      <span className="font-semibold text-slate-700 dark:text-slate-300">Saturation:</span>{' '}
+                      {selectedData.saturationUnavailable ? (
+                        <span className="text-slate-500 font-mono">No data</span>
+                      ) : (
+                        <span className="font-mono font-bold text-slate-800 dark:text-slate-100">{selectedData.saturation.toFixed(1)}%</span>
+                      )}
+                    </div>
+                    <div>
+                      <span className="font-semibold text-slate-700 dark:text-slate-300">Status:</span>{' '}
+                      <span className="font-bold" style={{ color: getRiskColor(selectedData.status) }}>{selectedData.status}</span>
+                    </div>
+                    {selectedData.farmerCount != null && (
+                      <div><span className="font-semibold text-slate-700 dark:text-slate-300">Declarations:</span> {selectedData.farmerCount}</div>
+                    )}
+                    <div className="text-[10px] text-slate-500 font-mono mt-1 pt-1 border-t border-slate-100 dark:border-white/5">
+                      {selectedData.action}
+                    </div>
+                  </div>
+                ) : (
+                  <div className="text-[11px] text-slate-500 italic">
+                    No active sowing declarations recorded for this district in {season}.
+                  </div>
+                )}
+              </div>
+            )}
+
             {/* Map Legend Overlay */}
             <div className="absolute bottom-4 right-4 z-[1000] bg-white/90 dark:bg-slate-950/90 backdrop-blur border border-slate-200 dark:border-white/10 p-2.5 rounded-xl shadow-lg flex flex-col gap-1.5 text-[9px] font-bold uppercase tracking-wider text-slate-600 dark:text-slate-400">
               <div className="flex items-center gap-2"><div className="w-2.5 h-2.5 rounded-full bg-emerald-500 shadow-[0_0_8px_rgba(16,185,129,0.8)]"></div> SAFE (LOW)</div>

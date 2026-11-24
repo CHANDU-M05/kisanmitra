@@ -200,3 +200,84 @@ test('every saturation request states the season it is asking about', () => {
     }
   }
 });
+
+test('district coverage: all 31 administrative districts in Karnataka have valid GeoJSON geometry', () => {
+  const geojson = JSON.parse(readFileSync(new URL('../src/assets/karnataka_districts.json', import.meta.url), 'utf8'));
+  const features = geojson.features || [];
+  assert.equal(features.length, 31, 'GeoJSON must contain exactly 31 Karnataka district geometries');
+
+  const EXPECTED_DISTRICTS = [
+    'Bagalkot', 'Ballari', 'Belagavi', 'Bengaluru Rural', 'Bengaluru Urban',
+    'Bidar', 'Chamarajanagar', 'Chikkaballapur', 'Chikkamagaluru', 'Chitradurga',
+    'Dakshina Kannada', 'Davanagere', 'Dharwad', 'Gadag', 'Hassan',
+    'Haveri', 'Kalaburagi', 'Kodagu', 'Kolar', 'Koppal',
+    'Mandya', 'Mysuru', 'Raichur', 'Ramanagara', 'Shivamogga',
+    'Tumakuru', 'Udupi', 'Uttara Kannada', 'Vijayanagara', 'Vijayapura', 'Yadgir'
+  ];
+
+  const presentDistricts = features.map(f => f.properties?.district || f.properties?.name);
+  assert.equal(new Set(presentDistricts).size, 31, 'No duplicate district identifiers permitted');
+  for (const expected of EXPECTED_DISTRICTS) {
+    assert.ok(
+      presentDistricts.includes(expected),
+      `Expected district "${expected}" is missing from karnataka_districts.json`
+    );
+  }
+
+  // Strict geometric and coordinate validity checks
+  const districtBounds = {};
+  for (const feat of features) {
+    const d = feat.properties?.district;
+    const geom = feat.geometry;
+    assert.ok(geom && (geom.type === 'Polygon' || geom.type === 'MultiPolygon'), `${d} has invalid geometry type`);
+    const polys = geom.type === 'Polygon' ? [geom.coordinates] : geom.coordinates;
+    assert.ok(polys.length > 0, `${d} has empty geometry`);
+
+    let minLon = 180, maxLon = -180, minLat = 90, maxLat = -90;
+    for (const poly of polys) {
+      assert.ok(poly.length > 0, `${d} has empty polygon coordinates`);
+      for (const ring of poly) {
+        assert.ok(ring.length >= 4, `${d} has linear ring with fewer than 4 coordinates`);
+        const first = ring[0];
+        const last = ring[ring.length - 1];
+        assert.equal(first[0], last[0], `${d} ring is not closed (lon mismatch)`);
+        assert.equal(first[1], last[1], `${d} ring is not closed (lat mismatch)`);
+
+        for (const [lon, lat] of ring) {
+          // Karnataka roughly bounds: Lon [74.0, 78.6], Lat [11.5, 18.5]
+          assert.ok(Number.isFinite(lon) && lon >= 73.5 && lon <= 79.0, `${d} coordinate out of range: lon=${lon}`);
+          assert.ok(Number.isFinite(lat) && lat >= 11.0 && lat <= 19.0, `${d} coordinate out of range: lat=${lat}`);
+          if (lon < minLon) minLon = lon;
+          if (lon > maxLon) maxLon = lon;
+          if (lat < minLat) minLat = lat;
+          if (lat > maxLat) maxLat = lat;
+        }
+      }
+    }
+    districtBounds[d] = { minLon, maxLon, minLat, maxLat };
+  }
+
+  // Topological separation & center check: Vijayanagara (headquarters Hosapete) vs Ballari
+  const v = districtBounds['Vijayanagara'];
+  const b = districtBounds['Ballari'];
+  assert.ok(v.minLon < b.minLon, 'Vijayanagara must extend further west than Ballari');
+  assert.ok(b.maxLon > v.maxLon, 'Ballari must extend further east than Vijayanagara');
+  // Confirm distinct centroids
+  const vCentroidLon = (v.minLon + v.maxLon) / 2;
+  const bCentroidLon = (b.minLon + b.maxLon) / 2;
+  assert.ok(bCentroidLon - vCentroidLon > 0.4, 'Vijayanagara and Ballari must have distinct geographic centroids');
+});
+
+test('allocation header transparency: distinguishes classified crop allocations from raw declarations', () => {
+  const src = readFileSync(new URL('../src/pages/InsightsView.jsx', import.meta.url), 'utf8');
+  assert.match(
+    src,
+    /\{totalAllocated\}\s*classified crop allocations/,
+    'InsightsView must describe the summed crop count as classified crop allocations'
+  );
+  assert.match(
+    src,
+    /rawDeclarationCount\s*!==\s*totalAllocated[\s\S]*?raw declarations/,
+    'InsightsView must distinguish raw declaration count when unclassified records exist'
+  );
+});
