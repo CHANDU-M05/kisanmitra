@@ -21,6 +21,7 @@ import socket
 from pathlib import Path
 
 import pytest
+from sqlalchemy.engine import URL
 
 import db_safety
 from db_safety import (
@@ -346,7 +347,7 @@ def test_sync_engine_imported_via_secondary_alias_is_blocked(cleared, monkeypatc
 
     monkeypatch.setattr(socket.socket, "connect", _spy)
     eng = eng_pkg.create_engine(
-        "postgresql+psycopg://unauth.example:5432/kisanmitra"
+        URL.create("postgresql+psycopg", host="unauth.example", port=5432, database="kisanmitra")
     )
     with pytest.raises(DisallowedDatabaseAccess):
         with eng.connect():
@@ -369,7 +370,7 @@ def test_async_engine_imported_via_inner_module_is_blocked(cleared, monkeypatch)
 
     async def _go():
         eng = sa_ext_engine.create_async_engine(
-            "postgresql+psycopg://unauth.example:5432/kisanmitra"
+            URL.create("postgresql+psycopg", host="unauth.example", port=5432, database="kisanmitra")
         )
         try:
             async with eng.connect():
@@ -405,7 +406,7 @@ def test_class_guard_blocks_a_preinstalled_factory_reference(cleared, monkeypatc
     # The wrapper exposes the raw original it delegates to; grabbing it here is
     # exactly what a module that imported create_engine before install would hold.
     raw_create = sqlalchemy.create_engine.__wrapped__  # the true original factory
-    eng = raw_create(f"postgresql+{driver}://unauth.example:5432/kisanmitra")
+    eng = raw_create(URL.create(f"postgresql+{driver}", host="unauth.example", port=5432, database="kisanmitra"))
     with pytest.raises(DisallowedDatabaseAccess):
         with eng.connect():
             pass
@@ -428,7 +429,7 @@ def test_class_guard_blocks_preinstalled_asyncpg_reference(cleared, monkeypatch)
 
     monkeypatch.setattr(socket.socket, "connect", _spy)
     raw_async = sa_ext.create_async_engine.__wrapped__
-    eng = raw_async("postgresql+asyncpg://unauth.example:5432/kisanmitra")
+    eng = raw_async(URL.create("postgresql+asyncpg", host="unauth.example", port=5432, database="kisanmitra"))
 
     async def _go():
         try:
@@ -490,7 +491,8 @@ def _spy(self, addr, *a, **k):
     raise AssertionError("socket attempted for an unauthorized target")
 socket.socket.connect = _spy
 
-eng = raw_before("postgresql+psycopg://unauth.example:5432/kisanmitra")
+from sqlalchemy.engine import URL as _URL
+eng = raw_before(_URL.create("postgresql+psycopg", host="unauth.example", port=5432, database="kisanmitra"))
 try:
     with eng.connect():
         raise SystemExit("FAIL: pre-install factory produced an unguarded engine")

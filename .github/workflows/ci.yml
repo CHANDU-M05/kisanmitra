@@ -90,7 +90,7 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           pip install -r requirements.txt
-          pip install pytest ruff pip-audit
+          pip install pytest ruff pip-audit psycopg2-binary asyncpg
       - name: Enable pgvector extension
         env:
           PGPASSWORD: ci_password
