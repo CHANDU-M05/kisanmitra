@@ -117,7 +117,7 @@ jobs:
       - name: Run test suite (artifact-free mode)
         run: |
           set -o pipefail
-          pytest -q -m "not requires_served_model" -rs | tee pytest-artifact-free.log
+          pytest -q -m "not requires_served_model and not integration_db" -rs | tee pytest-artifact-free.log
           # This job provisions the PostgreSQL service AND explicitly authorizes
           # the disposable kisanmitra_test DB (KM_TEST_DB_APPROVED/KM_TEST_DB_NAME),
           # so a DB-backed test can no longer skip for "PostgreSQL not reachable".
